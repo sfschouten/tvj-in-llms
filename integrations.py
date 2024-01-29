@@ -1,7 +1,13 @@
 import random
+import os
+
+from pathlib import Path
 from typing import Type, Optional
 
-from tango.common import Registrable
+import duckdb
+from duckdb import DuckDBPyConnection
+from tango import Format, Step
+from tango.common import Registrable, PathOrStr
 from tango.integrations.torch.model import Model
 from tango.integrations.transformers import Config
 
@@ -22,13 +28,15 @@ class QuantizationConfig(QuantizationConfigMixin, Registrable):
 
 
 QuantizationConfig.register('gptq-config')(GPTQConfigOriginal)
+
+
 # TODO register other quantization configs
 
 
 # override default `from_pretrained` wrappers
 
 
-def auto_model_wrapper_factory(cls: type) -> Type[Model]:
+def auto_model_wrapper_factory(cls: type) -> tuple[Type[Model], Type[Step[Model]]]:
     class AutoModelWrapper(cls, Model):  # type: ignore
         @classmethod
         def from_pretrained(
@@ -43,23 +51,77 @@ def auto_model_wrapper_factory(cls: type) -> Type[Model]:
                 pretrained_model_name_or_path, torch_dtype=getattr(torch, torch_dtype), config=config,
                 quantization_config=quantization_config, **kwargs
             )
-            model.__deepcopy__ = lambda x: x
+
+            def new_deepcopy(self, _):
+                return self
+
+            model.__class__.__deepcopy__ = new_deepcopy
             return model
 
         @classmethod
         def from_config(cls, config: Config, **kwargs) -> Model:
             return super().from_config(config, **kwargs)
 
-    return AutoModelWrapper
+    # dummy step to load model once and use in multiple steps, and only when needed by another step
+    class AutoModelLoaderPretrained(Step):
+        CACHEABLE = False
+        MODEL_CLASS = AutoModelWrapper
+
+        def run(self, **kwargs) -> Model:
+            return self.MODEL_CLASS.from_pretrained(**kwargs)
+
+    return AutoModelWrapper, AutoModelLoaderPretrained
 
 
 for name, cls in modeling_auto.__dict__.items():
     if isinstance(cls, type) and name.startswith("AutoModel"):
-        wrapped_cls = auto_model_wrapper_factory(cls)
-        Model.register(
-            "transformers::" + name + "::from_pretrained", constructor="from_pretrained", exist_ok=True
-        )(wrapped_cls)
-        Model.register(
-            "transformers::" + name + "::from_config", constructor="from_config", exist_ok=True
-        )(wrapped_cls)
+        wrapper_cls, loader_cls = auto_model_wrapper_factory(cls)
+        name_prefix = "transformers::" + name + "::"
 
+        Model.register(name_prefix + "from_pretrained", constructor="from_pretrained", exist_ok=True)(wrapper_cls)
+        Model.register(name_prefix + "from_config", constructor="from_config", exist_ok=True)(wrapper_cls)
+
+        Step.register(name_prefix + "from_pretrained::step")(loader_cls)
+
+
+@Step.register('load_model')
+class LoadModel(Step[Model]):
+    CACHEABLE = False
+
+    def run(self, model: Model) -> Model:
+        return model
+
+
+class TupleFormat(Format[tuple]):
+
+    def __init__(self, formats: tuple[Format]):
+        self.formats = formats
+
+    def write(self, artifact: tuple, dir: PathOrStr):
+        for i, (elem, format) in enumerate(zip(artifact, self.formats)):
+            subdir = Path(dir) / f'elem_{i}'
+            format.write(elem, subdir)
+
+    def read(self, dir: PathOrStr) -> tuple:
+        result = [None] * len(self.formats)
+        for entry in os.listdir(dir):
+            subdir = Path(dir) / entry
+            if not os.path.isdir(subdir) or not entry.startswith('elem_'):
+                continue
+
+            i = int(entry.split('_')[1])
+            fmt = self.formats[i]
+            result[i] = fmt.read(subdir)
+
+        return tuple(result)
+
+
+class DuckDBFormat(Format[DuckDBPyConnection]):
+
+    def write(self, artifact: DuckDBPyConnection, dir: PathOrStr):
+        artifact.sql(f"EXPORT DATABASE '{str(dir)}';")
+
+    def read(self, dir: PathOrStr) -> DuckDBPyConnection:
+        con = duckdb.connect()
+        con.sql(f"IMPORT DATABASE '{str(dir)}';")
+        return con

@@ -178,7 +178,7 @@ class LoadData(Step[Dataset]):
         all_prompts = DatasetTemplates(dataset_name)
 
         prompt_name_list = list(all_prompts.name_to_id_mapping.keys())
-        if prompt_i:
+        if prompt_i is not None:
             prompt_name = prompt_name_list[prompt_i]
 
         # create the ContrastDataset (with all samples)

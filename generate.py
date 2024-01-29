@@ -36,7 +36,7 @@ def get_first_mask_loc(mask, shift=False):
     return first_mask_loc
 
 
-def get_answer_probabilities(batch_ids, output, answer_tokens, model_type, use_decoder=True, nr_tokens=None):
+def get_answer_logits(batch_ids, output, answer_tokens, model_type, use_decoder=True, nr_tokens=None):
     input_ids = batch_ids['input_ids']
     logits = output['logits']
     B, S, V = logits.size()
@@ -48,8 +48,7 @@ def get_answer_probabilities(batch_ids, output, answer_tokens, model_type, use_d
 
     # for each sample in the batch we want to know what probability was predicted for the label of the token_idx token
     tokens = input_ids.index_select(index=answer_tokens.flatten(), dim=1).view(B, B, T).diagonal().transpose(0, -1)
-    logits = logits.index_select(index=answer_tokens.flatten() + off, dim=1).view(B, B, T, V).diagonal().permute(2, 0,
-                                                                                                                 1)
+    logits = logits.index_select(index=answer_tokens.flatten()+off, dim=1).view(B, B, T, V).diagonal().permute(2, 0, 1)
 
     # index tokens
     logits = logits.index_select(index=tokens.flatten(), dim=-1)  # B x nr_tokens x B*nr_tokens
@@ -108,9 +107,9 @@ def get_individual_hidden_states(model, batch_ids, answer_tokens, layer=None, al
             assert token_idx < 0, print("token_idx must be either 0 or negative, but got", token_idx)
             final_hs = hs[torch.arange(hs.size(0)), first_mask_loc + token_idx]  # (bs, dim, num_layers)
 
-    probs = get_answer_probabilities(batch_ids, output, answer_tokens, model_type, use_decoder=use_decoder)
+    logits = get_answer_logits(batch_ids, output, answer_tokens, model_type, use_decoder=use_decoder)
 
-    return final_hs, probs.cpu()
+    return final_hs, logits.cpu()
 
 
 def get_masked_lm_logits(model, batch_ids, answer_tokens, mask_token_id, model_type):
@@ -124,8 +123,8 @@ def get_masked_lm_logits(model, batch_ids, answer_tokens, mask_token_id, model_t
         batch_ids = batch_ids.to(model.device)
         output = model(**batch_ids | {'input_ids': input_ids}, output_hidden_states=True)
 
-    probs = get_answer_probabilities(batch_ids, output, answer_tokens, model_type, use_decoder=False)
-    return probs.cpu()
+    logits = get_answer_logits(batch_ids, output, answer_tokens, model_type, use_decoder=False)
+    return logits.cpu()
 
 
 def get_all_hidden_states(model, dataloader, mask_token_id, layer=None, all_layers=True, token_idx=-1,
@@ -138,7 +137,7 @@ def get_all_hidden_states(model, dataloader, mask_token_id, layer=None, all_laye
     E.g. this function should be used for "Q: Is 2+2=5? A: True" or "Q: Is 2+2=5? A: False", but NOT for "Q: Is 2+2=5? A: ".
     """
     all_pos_hs, all_neg_hs = [], []
-    all_pos_probs, all_neg_probs = [], []
+    all_pos_logits, all_neg_logits = [], []
     all_gt_labels = []
 
     model.eval()
@@ -147,39 +146,36 @@ def get_all_hidden_states(model, dataloader, mask_token_id, layer=None, all_laye
 
         kwargs = dict(layer=layer, all_layers=all_layers, token_idx=token_idx, all_tokens=all_tokens,
                       model_type=model_type, use_decoder=use_decoder)
-        neg_hs, neg_probs = get_individual_hidden_states(model, neg_ids, neg_answer_tokens, **kwargs)
-        pos_hs, pos_probs = get_individual_hidden_states(model, pos_ids, pos_answer_tokens, **kwargs)
+        neg_hs, neg_logits = get_individual_hidden_states(model, neg_ids, neg_answer_tokens, **kwargs)
+        pos_hs, pos_logits = get_individual_hidden_states(model, pos_ids, pos_answer_tokens, **kwargs)
 
         if model_type == 'encoder' or (model_type == 'encoder_decoder' and not use_decoder):
-            pos_probs = get_masked_lm_logits(model, pos_ids, pos_answer_tokens, mask_token_id, model_type)
-            neg_probs = get_masked_lm_logits(model, neg_ids, neg_answer_tokens, mask_token_id, model_type)
+            pos_logits = get_masked_lm_logits(model, pos_ids, pos_answer_tokens, mask_token_id, model_type)
+            neg_logits = get_masked_lm_logits(model, neg_ids, neg_answer_tokens, mask_token_id, model_type)
 
         if dataloader.batch_size == 1:
             neg_hs, pos_hs = neg_hs.unsqueeze(0), pos_hs.unsqueeze(0)
 
         all_neg_hs.append(neg_hs)
         all_pos_hs.append(pos_hs)
-        all_pos_probs.append(pos_probs)
-        all_neg_probs.append(neg_probs)
+        all_pos_logits.append(pos_logits )
+        all_neg_logits.append(neg_logits )
         all_gt_labels.append(gt_label)
 
     all_neg_hs = torch.cat(all_neg_hs, dim=0)
     all_pos_hs = torch.cat(all_pos_hs, dim=0)
-    all_neg_probs = torch.cat(all_neg_probs, dim=0)
-    all_pos_probs = torch.cat(all_pos_probs, dim=0)
+    all_neg_logits = torch.cat(all_neg_logits, dim=0)
+    all_pos_logits = torch.cat(all_pos_logits, dim=0)
     all_gt_labels = torch.cat(all_gt_labels, dim=0)
 
-    return all_neg_hs, all_pos_hs, all_neg_probs, all_pos_probs, all_gt_labels
+    return all_neg_hs, all_pos_hs, all_neg_logits, all_pos_logits, all_gt_labels
 
 
 HiddenStates = torch.Tensor
-Probabilities = torch.Tensor
+Logits = torch.Tensor
 Labels = torch.Tensor
-# SampleIndices = torch.Tensor
-# ParentIndices = torch.Tensor
 Metadata = list[dict]
-# GenOut = tuple[HiddenStates, Probabilities, Labels, Metadata]
-GenOut = tuple[HiddenStates, Probabilities, Labels]
+GenOut = tuple[HiddenStates, Logits, Labels]
 
 
 @Format.register('model_gen_out')
@@ -281,14 +277,14 @@ class Generate(Step[GenOut]):
 
         # Get the hidden states and labels
         print("Generating hidden states")
-        neg_hs, pos_hs, neg_probs, pos_probs, y = get_all_hidden_states(
+        neg_hs, pos_hs, neg_logits, pos_logits, y = get_all_hidden_states(
             model, dataloader, tokenizer.mask_token_id,
             layer=layer, all_layers=all_layers, token_idx=token_idx, all_tokens=all_tokens, model_type=model_type,
             use_decoder=use_decoder
         )
 
         hs = torch.stack((neg_hs, pos_hs)).to(torch.float32)
-        ps = torch.stack((neg_probs, pos_probs)).to(torch.float32)
+        ps = torch.stack((neg_logits, pos_logits)).to(torch.float32)
 
         return hs, ps, y
 
