@@ -20,7 +20,7 @@ from probe_train import LR, CCS, CCReflection
 Probabilities = torch.Tensor
 Direction = torch.Tensor
 Labels = torch.Tensor
-ProbeResults = tuple[Labels, Probabilities, Direction]
+ProbeResults = tuple["BeliefProbe", Labels, Probabilities, Direction]
 
 
 @Step.register('create_splits')
@@ -84,7 +84,7 @@ class PrintRank(Step[None]):
 class BeliefProbe(Registrable, ABC):
 
     @abstractmethod
-    def train(self, gen_out: GenOut) -> None:
+    def train(self, gen_out: GenOut) -> float:
         raise NotImplementedError
 
     @abstractmethod
@@ -108,18 +108,30 @@ class BeliefProbe(Registrable, ABC):
 
 @Step.register('train_belief_probe')
 class TrainBeliefProbe(Step[BeliefProbe]):
-    VERSION = "002"
+    VERSION = "005"
 
     def run(self,  data: DatasetDict[GenOut], probe: BeliefProbe, **kwargs) -> BeliefProbe:
-        probe.train(data['train'])
+        probe.train_loss = probe.train(data['train'])
         probe.calc_calibration_scalar(data['train'])
+        probe.config = self.config['probe']
+        probe.train_step_name = self.name
         return probe
+
+
+@Step.register('select_best')
+class SelectBest(Step[list[BeliefProbe]]):
+    VERSION = "002"
+
+    def run(self, probes, **kwargs) -> BeliefProbe:
+        best_probe = min(probes, key=lambda p: p.train_loss)
+        best_probe.train_step_name = self.name
+        return best_probe
 
 
 @Step.register('eval_belief_probe')
 class EvalBeliefProbe(Step[ProbeResults]):
     FORMAT = TorchFormat
-    VERSION = "004"
+    VERSION = "004a"
 
     def run(self,  data: DatasetDict[GenOut], probe: BeliefProbe, **kwargs) -> ProbeResults:
         probs = probe.eval(data['eval'])
@@ -129,7 +141,7 @@ class EvalBeliefProbe(Step[ProbeResults]):
         logits *= probe.calibration_scalar
         new_probs = torch.sigmoid(logits)
 
-        return data['eval'][2], new_probs, probe.get_direction()
+        return probe, data['eval'][2], new_probs, probe.get_direction()
 
 
 @BeliefProbe.register('lm_head_baseline')
@@ -224,7 +236,7 @@ class LogisticRegressionGradientDescent(BeliefProbe):
 
     def train(self, gen_out: GenOut) -> None:
         hs, ps, y = gen_out
-        self.lr.train(hs[0], hs[1], y)
+        return self.lr.train(hs[0], hs[1], y)
 
     def eval(self, gen_out: GenOut) -> Probabilities:
         hs, ps, y = gen_out
@@ -254,7 +266,7 @@ class ContrastConsistentSearchGradientDescent(BeliefProbe):
 
     def train(self, gen_out: GenOut) -> None:
         hs, ps, y = gen_out
-        self.ccs.train(hs[0], hs[1], y)
+        return self.ccs.train(hs[0], hs[1], y)
 
     def eval(self, gen_out: GenOut) -> Probabilities:
         hs, ps, y = gen_out
@@ -338,7 +350,7 @@ class ContrastConsistentReflection(BeliefProbe):
 
     def train(self, gen_out: GenOut) -> None:
         hs, ps, y = gen_out
-        self.ccr.train(hs[0], hs[1], y)
+        return self.ccr.train(hs[0], hs[1], y)
 
     def eval(self, gen_out: GenOut) -> Probabilities:
         hs, ps, y = gen_out
@@ -437,6 +449,8 @@ class UnsupervisedMassMeanProbe(BeliefProbe):
 
         acc = ((pred > 0) == y).float().mean()
         print(f'unsupervised mass-mean accuracy: {acc}')
+        if acc < 0.5:
+            self.theta = -self.theta
 
         return torch.sigmoid(pred)
 

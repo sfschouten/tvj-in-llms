@@ -3,6 +3,7 @@ import operator
 import hashlib
 
 import matplotlib
+import pandas as pd
 import torch
 import duckdb
 import pandas
@@ -13,11 +14,10 @@ from tango.format import TextFormat
 import numpy as np
 import seaborn as sns
 import matplotlib.patches as mpatches
-
+from scipy.stats import hmean
 
 from integrations import DuckDBFormat
 from evaluate import ProbeResults
-
 
 PRIMITIVES = (bool, str, int, float)
 
@@ -25,7 +25,7 @@ PRIMITIVES = (bool, str, int, float)
 @Step.register('duckdb_builder')
 class DuckDBBuilder(Step[DuckDBPyConnection]):
     FORMAT = DuckDBFormat
-    VERSION = '009e'
+    VERSION = '014'
 
     def run(self, result_inputs: list, results: list[ProbeResults]) -> DuckDBPyConnection:
         dependencies_by_name = {step.name: step for step in self.dependencies}
@@ -35,7 +35,6 @@ class DuckDBBuilder(Step[DuckDBPyConnection]):
             if arraylike is None:
                 return None
             return torch.tensor(arraylike).squeeze().float().tolist()
-        results = [map(normalize, result) for result in results]
 
         def extract_relevant_info(step, prefix):
             return {
@@ -54,32 +53,202 @@ class DuckDBBuilder(Step[DuckDBPyConnection]):
                 extract_relevant_info(dependency, 'train')
                 for dependency in step.kwargs['probe'].recursive_dependencies
             ] + [
-                {f'PROBE_{key}': value for key, value in step.kwargs['probe'].config['probe'].items()}
-                | {'STEP_NAME': step.name}
+                {f'PROBE_{key}': value for key, value in result[0].config.items()}
+                | {'EVAL_STEP_NAME': step.name}
+                | {
+                    f'TRAIN_STEP_NAME.{i}': part
+                    for i, part in enumerate(result[0].train_step_name.split('|'))
+                }
             ])
-            for step in input_steps
+            for result, step in zip(results, input_steps)
         ]
 
+        # create groups of results to analyse together.
         for info_dict in info:
-            keys = set(info_dict.keys()) - {
-                # 'train_LoadData_prompt_name', 'train_LoadData_dataset_config_name',  # TODO add back and deal with
+            keys = set(info_dict.keys()) - {'EVAL_STEP_NAME'}
+            probe_details = {key for key in info_dict.keys() if key.startswith('PROBE')}
+            # results that only differ in the data variant used for training/evaluation belong to the same level 0 group
+            excl = [{
+                'train_LoadData_prompt_name', 'train_LoadData_dataset_config_name', 'TRAIN_STEP_NAME.1',
                 'eval_LoadData_prompt_name', 'eval_LoadData_dataset_config_name',
-                'STEP_NAME'
-            }
-            values = [str(info_dict[key]) for key in sorted(keys)]
-            info_dict['data_group_id'] = hashlib.sha256("".join(values).encode('utf8')).hexdigest()
+            } | probe_details]
+            # level 1 groups consist of level 0 groups that also differ in probe type
+            excl.append(excl[0] | {'TRAIN_STEP_NAME.3', 'train_Normalize_var_normalize', 'eval_CreateSplits_layer_index'})
+            for lvl, lvl_excl in enumerate(excl):
+                values = [str(info_dict[key]) for key in sorted(keys - lvl_excl)]
+                info_dict[f'data_group_l{lvl}_id'] = hashlib.sha256("".join(values).encode('utf8')).hexdigest()
 
         df = pandas.DataFrame(info)
-        labels, predictions, directions = zip(*results)
-        df['label'] = labels
-        df['direction'] = directions
-        df['prediction'] = predictions
+        _, labels, predictions, directions = zip(*results)
+        df['label'] = list(map(normalize, labels))
+        df['direction'] = list(map(normalize, directions))
+        df['prediction'] = list(map(normalize, predictions))
 
         # store in duckdb
         db = duckdb.connect()
         db.sql('CREATE TABLE results AS SELECT * FROM df')
 
         return db
+
+
+@Step.register('context_sensitivity')
+class ContextSensitivity(Step[str]):
+    FORMAT = TextFormat
+    VERSION = "002"
+
+    def run(self, db: DuckDBPyConnection, **kwargs) -> str:
+        df: DataFrame = db.sql("SELECT * FROM results").df()
+
+        # convert to ndarray
+        df['prediction'] = df.apply(lambda x: np.array(x.prediction), axis=1)
+        df['direction'] = df.apply(lambda x: np.array(x.direction), axis=1)
+        df['label'] = df.apply(lambda x: np.array(x.label), axis=1)
+
+        # nicer names
+        df = df.rename(columns={
+            'train_LoadData_prompt_name': 'train_prompt',
+            'train_LoadData_dataset_config_name': 'train_config',
+            'eval_LoadData_prompt_name': 'eval_prompt',
+            'eval_LoadData_dataset_config_name': 'eval_config',
+        })
+        df['premise_asserted'] = df['eval_prompt'] != 'truth-premise_negated'
+        df['premise_origin'] = df['eval_config'].replace({
+            'no_neutral_shuffle_premises': 'shuffled',
+            'no_neutral_random_bits': 'random',
+            'no_neutral': 'original'
+        })
+        df.loc[df['eval_prompt'] == 'truth-hypothesis_only', 'premise_origin'] = 'no-premise'
+        df['same_variant'] = (df['eval_prompt'] == df['train_prompt']) & (df['eval_config'] == df['train_config'])
+
+        pos_origin_idx = (df['premise_origin'] == 'original') & (df['eval_prompt'] == 'truth-full')
+        df['same_variant_grp'] = df['same_variant'] | pos_origin_idx
+        df['pos_origin_variant_grp'] = ~df['same_variant'] | pos_origin_idx
+
+        err_cols = ['error_1', 'error_2', 'error_3ab', 'error_3cd', 'error_4']
+        total_err_cols = [f'total_{err}' for err in err_cols]
+        df = df.assign(**{err_col: None for err_col in err_cols + total_err_cols})
+
+        subgroup_aggr_stats = {}
+
+        for l1_name, l1_df in df.groupby(by='data_group_l1_id'):
+            for l0_name, l0_df in l1_df.groupby(by='data_group_l0_id'):
+                original_pos = l0_df[(l0_df['premise_origin'] == 'original') & (l0_df['eval_prompt'] == 'truth-full')]
+
+                def process_subgroup(sgr_df, sg_name):
+                    a, o = sgr_df['premise_asserted'], sgr_df['premise_origin']
+                    h_nly_i = sgr_df[sgr_df['eval_prompt'] == 'truth-hypothesis_only'].index
+                    hyp_only_pred_vals = sgr_df.loc[h_nly_i].prediction.values[0]
+
+                    for origin, error_i in [('random', 1), ('shuffled', 2)]:
+                        for asserted in [True, False]:
+                            # error types 1 & 2
+                            bl_i = sgr_df[(o == origin) & (a == asserted)].index
+                            assert len(bl_i) == 1
+                            err = abs(sgr_df.loc[bl_i].prediction.values[0] - hyp_only_pred_vals)
+                            df.at[bl_i[0], f'error_{error_i}'] = err
+
+                    labels = original_pos.label.values[0].astype(bool)
+
+                    # error type 3
+                    o_neg_i = sgr_df[(o == 'original') & ~a].index
+                    assert len(o_neg_i) == 1
+                    o_neg_vals = sgr_df.loc[o_neg_i].prediction.values[0]
+                    o_pos_vals = original_pos.prediction.values[0]
+
+                    err_3a = labels * (o_neg_vals - hyp_only_pred_vals).clip(min=0)
+                    err_3b = ~labels * (-o_neg_vals + hyp_only_pred_vals).clip(min=0)
+                    err_3c = labels * (-o_pos_vals + hyp_only_pred_vals).clip(min=0)
+                    err_3d = ~labels * (o_pos_vals - hyp_only_pred_vals).clip(min=0)
+                    df.at[o_neg_i[0], 'error_3ab'] = err_3a + err_3b
+                    df.at[h_nly_i[0], 'error_3cd'] = err_3c + err_3d
+
+                    # error type 4
+                    df.at[o_neg_i[0], 'error_4'] = abs(o_neg_vals - o_pos_vals)
+
+                    # calculate totals
+                    for col in df.columns:
+                        if col.startswith('error_'):
+                            df.loc[sgr_df.index, 'total_' + col] = df.loc[sgr_df.index, col].apply(
+                                lambda x: pd.NA if x is None else x.sum()
+                            )
+
+                    # aggregate
+                    aggregates = df.loc[sgr_df.index, total_err_cols].mean(axis=0).to_dict()
+                    total_error_3 = (aggregates.pop('total_error_3ab') + aggregates.pop('total_error_3cd')) / 2
+                    aggregates |= {'total_error_3': total_error_3}
+                    aggregates |= {
+                        'total_error_A': hmean([
+                            aggregates['total_error_1'], aggregates['total_error_2'], aggregates['total_error_3'],
+                    ]), 'total_error_B': hmean([
+                            aggregates['total_error_1'], aggregates['total_error_2'], aggregates['total_error_4'],
+                    ])}
+                    fix_values = sgr_df.loc[
+                        sgr_df.index[0], sgr_df.columns[sgr_df.applymap(str).nunique() == 1]
+                    ].to_dict()
+                    subgroup_aggr_stats[f'{l0_name}_{sg_name}'] = fix_values | aggregates
+
+                # subgroup with training and evaluation on same data (only exists for unsupervised methods)
+                same_data_df = l0_df.loc[l0_df['same_variant']]
+                if len(same_data_df.index) > 1:
+                    process_subgroup(same_data_df, 'same')
+
+                # subgroup with training always done on original-positive data
+                other_data_df = l0_df.loc[~l0_df['same_variant']]
+                process_subgroup(other_data_df, 'origin_pos')
+
+            # # # # # # # # # #
+            # GENERATE PLOTS  #
+            # # # # # # # # # #
+            for group in ['same_variant_grp', 'pos_origin_variant_grp']:
+                df = l1_df[l1_df[group]][
+                    ['label', 'prediction', 'premise_origin', 'premise_asserted', 'TRAIN_STEP_NAME.3']
+                ]
+                df = df.explode(['label', 'prediction'])
+                g = sns.FacetGrid(df, row='TRAIN_STEP_NAME.3', col='label', margin_titles=False, ylim=(0, 1), aspect=2)
+
+                # add a horizontal line
+                for ax in g.axes.flatten():
+                    ax.axhline(y=0.5, color='gray', linestyle='--', linewidth=1)
+
+                # Draw the plots
+                args = ('premise_origin', 'prediction', 'premise_asserted')
+                kwargs = {
+                    'palette': 'muted',
+                    'order': ['original', 'random', 'shuffled', 'no-premise'],
+                    # 'hue_order': ['True', 'False']
+                }
+                g.map(sns.boxplot, *args, showfliers=False, **kwargs)
+                g.map(sns.stripplot, *args, size=3, alpha=0.2, jitter=.2, linewidth=0.1, dodge=True, **kwargs)
+
+                # Create custom legend elements
+                legend_elements = [
+                    mpatches.Patch(color=color, label=label)
+                    for label, color in zip(['True', 'False'], sns.color_palette("muted"))
+                ] + [mpatches.Patch(color='grey', label='N/A')]
+                g.add_legend(handles=legend_elements)
+
+                for ax in g.axes.flat:
+                    # Change boxplot color
+                    box_children = [child for child in ax.get_children() if isinstance(child, matplotlib.patches.PathPatch)]
+                    if box_children:
+                        box_children[-1].set_facecolor('grey')
+
+                    # Change stripplot color
+                    stripplot_children = [child for child in ax.get_children() if
+                                          isinstance(child, matplotlib.collections.PathCollection)]
+                    if stripplot_children:
+                        stripplot_children[-1].set_facecolor('grey')
+                        stripplot_children[-1].set_edgecolor('grey')
+
+                    title = ax.get_title().replace(' | ', '\n| ')
+                    ax.set_title(title, fontsize=9)
+
+                g.fig.tight_layout()
+                g.fig.savefig(self.work_dir.parent / f'plot_{group}_{l1_name}.pdf', format='pdf', dpi=300)
+
+        pd.DataFrame.from_dict(subgroup_aggr_stats).T.to_csv(self.work_dir.parent / 'subgroup_aggr_stats.csv')
+
+        return None
 
 
 @Step.register('direction_similarity')
@@ -97,98 +266,3 @@ class DirectionSimilarity(Step[str]):
 
         csv_string = similarities.to_csv()
         return csv_string
-
-
-@Step.register('context_sensitivity')
-class ContextSensitivity(Step[str]):
-    FORMAT = TextFormat
-    VERSION = "001a"
-
-    def run(self, db: DuckDBPyConnection, **kwargs) -> str:
-        # compare evaluations on positive premises to all others
-
-        # join results on itself
-        df: DataFrame = db.sql(
-            "SELECT r1.data_group_id, r1.PROBE_type, "
-            "r1.STEP_NAME AS step_name1, r2.STEP_NAME AS step_name2, "
-            "r1.train_LoadData_prompt_name AS train_prompt1, r1.train_LoadData_dataset_config_name AS train_config1, "
-            "r2.train_LoadData_prompt_name AS train_prompt2, r2.train_LoadData_dataset_config_name AS train_config2, "
-            "r1.eval_LoadData_prompt_name AS eval_prompt1, r1.eval_LoadData_dataset_config_name AS eval_config1, "
-            "r2.eval_LoadData_prompt_name AS eval_prompt2, r2.eval_LoadData_dataset_config_name AS eval_config2, "
-            "r1.train_AutoModelLoaderPretrained_pretrained_model_name_or_path AS model_name, "
-            "r1.train_Generate_layer AS model_layer, "
-            "r1.train_Generate_token_idx AS token_idx, "
-            "r1.prediction AS prediction1, r2.prediction AS prediction2, r1.label AS label\n"
-            "FROM results AS r1\n"
-            "INNER JOIN results AS r2\n"
-            "ON r1.data_group_id = r2.data_group_id "
-            "AND r1.eval_LoadData_prompt_name = 'truth-full' "
-            "AND r1.eval_LoadData_dataset_config_name = 'no_neutral' \n"
-            "AND (r2.eval_LoadData_prompt_name != 'truth-full' "
-            "OR r2.eval_LoadData_dataset_config_name != 'no_neutral')\n"
-        ).df()
-        difference = np.array(df['prediction1'].values.tolist()) - np.array(df['prediction2'].values.tolist())
-        df['difference'] = list(difference)
-        df['premise_asserted'] = df['eval_prompt2'] != 'truth-premise_negated'
-        df['premise_origin'] = df['eval_config2'].replace({
-            'no_neutral_shuffle_premises': 'shuffled',
-            'no_neutral_random_bits': 'random',
-            'no_neutral': 'original'
-        })
-
-        # calculate metrics
-        pth = 20
-        pth_key = f"{pth}pth"
-        df[pth_key] = np.percentile(difference, axis=1, q=pth)
-
-        COLUMNS = {"data_group_id", "PROBE_type", "model_name", "model_layer", "token_idx"}
-        COL_STR = ", ".join(COLUMNS)
-        df2 = db.sql(
-            f'SELECT list("{pth_key}"), list(step_name2), {COL_STR}'
-            # f'list(eval_prompt1), list(eval_config1), list(eval_prompt2), list(eval_config2),'
-            # f'list(train_prompt1), list(train_config1), list(train_prompt2), list(train_config2), '
-            f'\nFROM df GROUP BY {COL_STR}\n'
-        ).df()
-
-        # GENERATE PLOTS
-        g = sns.FacetGrid(
-            df.explode(['label', 'difference']),
-            row='step_name1', col='label', margin_titles=False, ylim=(-1, 1), aspect=2
-        )
-
-        # add a horizontal line
-        for ax in g.axes.flatten():
-            ax.axhline(y=0, color='gray', linestyle='--', linewidth=1)
-
-        # Draw the plots
-        g.map(sns.boxplot, 'premise_origin', 'difference', 'premise_asserted', showfliers=False, palette='muted')
-        g.map(sns.stripplot, 'premise_origin', 'difference', 'premise_asserted', size=3, alpha=0.2, palette='muted',
-              jitter=.2, linewidth=0.1, dodge=True)
-
-        # Create custom legend elements
-        legend_elements = [
-            mpatches.Patch(color=color, label=label)
-            for label, color in zip(["False", "True"], sns.color_palette("muted"))
-        ] + [mpatches.Patch(color='grey', label='N/A')]
-        g.add_legend(handles=legend_elements)
-
-        for ax in g.axes.flat:
-            # Change boxplot color
-            box_children = [child for child in ax.get_children() if isinstance(child, matplotlib.patches.PathPatch)]
-            if box_children:
-                box_children[-1].set_facecolor('grey')  # Replace 'your_box_color' with the desired color
-
-            # Change stripplot color
-            stripplot_children = [child for child in ax.get_children() if
-                                  isinstance(child, matplotlib.collections.PathCollection)]
-            if stripplot_children:
-                stripplot_children[-1].set_facecolor('grey')
-                stripplot_children[-1].set_edgecolor('grey')
-
-            title = ax.get_title().replace(' | ', '\n| ')
-            ax.set_title(title, fontsize=9)
-
-        g.fig.tight_layout()
-        g.fig.savefig(self.work_dir.parent / 'plot.pdf', format='pdf', dpi=300)
-
-        return None

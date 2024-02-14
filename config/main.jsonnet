@@ -116,24 +116,9 @@ local CCS_SEEDS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 local usv_method_train_steps(data_key, model_key, model_object) =
     local prefix = model_key + "|" + data_key + "|";
-    {
-        [prefix + 'train|' + 'lm_head_baseline_calibrate=' + calibrate]: {
-            "type": "train_belief_probe",
-            data: {"ref": prefix+"split_outputs"},
-            probe: {
-                "type": "lm_head_baseline",
-                calibrate: calibrate
-            },
-        }
-        for calibrate in [true] #, false]
-    } + {
-        [prefix + 'train|' + 'ccr']: {
-            "type": "train_belief_probe",
-            data: {"ref": prefix+"var_normalized_hidden_states"},
-            probe: {"type": "ccr", seed: 0},
-        }
-    } + {
-        [prefix + 'train|' + 'ccs_' + seed]: {
+
+    local ccs_trials = {
+        [prefix + 'trial|ccs_' + seed]: {
             "type": "train_belief_probe",
             data: {"ref": prefix+"var_normalized_hidden_states"},
             probe: {
@@ -148,6 +133,34 @@ local usv_method_train_steps(data_key, model_key, model_object) =
             }
         }
         for seed in CCS_SEEDS
+    };
+
+    {
+        [prefix + 'train|' + 'lm_head_baseline_calibrate=' + calibrate]: {
+            "type": "train_belief_probe",
+            data: {"ref": prefix+"split_outputs"},
+            probe: {
+                "type": "lm_head_baseline",
+                calibrate: calibrate
+            },
+        }
+        for calibrate in [true] #, false]
+//    } + {
+//        [prefix + 'train|' + 'ccr']: {
+//            "type": "train_belief_probe",
+//            data: {"ref": prefix+"var_normalized_hidden_states"},
+//            probe: {"type": "ccr", seed: 0},
+//        }
+    } + ccs_trials + {
+        [prefix + 'train|ccs']: {
+            "type": "select_best",
+            data: {"ref": prefix+"var_normalized_hidden_states"},
+            probes: [
+                {"ref": prefix + 'trial|' + 'ccs_' + seed}
+                for seed in CCS_SEEDS
+            ],
+            probe_configs: std.objectKeysValues(ccs_trials)
+        }
     } + {
 //        [prefix + 'train|' + 'ccs_linear-prio=' + prio]: {
 //            "type": "train_belief_probe",
@@ -159,11 +172,11 @@ local usv_method_train_steps(data_key, model_key, model_object) =
 //        }
 //        for prio in [6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10, 10.5, 11, 11.5, 12]
 //    } + {
-        [prefix + 'train|' + 'unsupervised-massmean']: {
-            "type": "train_belief_probe",
-            data: {"ref": prefix+"normalized_hidden_states"},
-            probe: {"type": "unsupervised_mass_mean", linkage: "complete"},
-        }
+//        [prefix + 'train|' + 'unsupervised-massmean']: {
+//            "type": "train_belief_probe",
+//            data: {"ref": prefix+"normalized_hidden_states"},
+//            probe: {"type": "unsupervised_mass_mean", linkage: "complete"},
+//        }
     };
 
 local sv_method_train_steps(data_key, model_key) =
@@ -228,6 +241,7 @@ local steps_model(model_key) =
             probe: {"ref": probe_obj['key']},
         }
         for probe_obj in std.objectKeysValues(usv_train_steps_singles)
+        if std.length(std.findSubstr('train', probe_obj['key'])) > 0
     };
     # evaluate unsupervised methods trained on pos_prem on all other data variants
     local usv_eval_pos_prem_steps = {
@@ -238,6 +252,7 @@ local steps_model(model_key) =
         }
         for probe_obj in std.objectKeysValues(usv_train_steps_pos_prem)
         for data_key in std.objectFields(DATA)
+        if std.length(std.findSubstr('train', probe_obj['key'])) > 0
     };
     # evaluate unsupervised methods trained on combined data on all data variants
     # TODO
@@ -251,6 +266,7 @@ local steps_model(model_key) =
         }
         for data_key in std.objectFields(DATA)
         for probe_obj in std.objectKeysValues(sv_train_steps)
+        if std.length(std.findSubstr('train', probe_obj['key'])) > 0
     };
 
     {

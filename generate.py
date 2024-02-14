@@ -263,7 +263,8 @@ class Generate(Step[GenOut]):
             token_idx: int = -1,                    # which token to use (by default the last token)
             all_tokens: bool = False,               # whether to use all tokens or not
             # model options
-            model_type: str = "encoder_decoder", use_decoder: bool = False,
+            model_type: str = "encoder_decoder",
+            use_decoder: bool = False,
             # dataloader options
             pin_memory: bool = True, num_workers: int = 2
             ) -> GenOut:

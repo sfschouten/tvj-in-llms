@@ -1,3 +1,4 @@
 workspace:
   type: local
   dir: ./workspace
+include_package: ['analysis.py', 'data.py', 'evaluate.py', 'generate.py', 'integrations.py']
