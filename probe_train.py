@@ -63,7 +63,6 @@ class Trainer(object):
 
         predictions = ps.detach().cpu() > 0.5
         acc = (predictions.long() == y_test).float().mean()
-        acc = max(acc, 1 - acc)
         return acc, ps.detach().cpu()
 
     @abstractmethod

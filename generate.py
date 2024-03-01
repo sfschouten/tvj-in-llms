@@ -1,22 +1,20 @@
 """
 Code to generate the hidden states on which we'll train the various probing methods.
 """
-from pathlib import Path
 
-from tango import Step, Format
-from tango.common import PathOrStr
-from tango.integrations.torch import Model
+from tango import Step
+from tango.integrations.torch import Model, TorchFormat
 from tango.integrations.transformers import Tokenizer
 from tango.common.det_hash import det_hash
 
 from tqdm import tqdm
 
-import dill
-
 import torch
 import torch.nn.functional as F
 
 from torch.utils.data import Dataset, DataLoader
+
+from integrations import TupleFormat
 
 
 def get_first_mask_loc(mask, shift=False):
@@ -178,53 +176,9 @@ Metadata = list[dict]
 GenOut = tuple[HiddenStates, Logits, Labels]
 
 
-@Format.register('model_gen_out')
-class ModelForwardOutputsFormat(Format[GenOut]):
-    VERSION = "001"
-
-    def _read_tensor(self, name, dir):
-        filename = Path(dir) / f"{name}.pt"
-        with open(filename, "rb") as f:
-            version, artifact = torch.load(f, pickle_module=dill, map_location=torch.device('cpu'))
-            if version > self.VERSION:
-                raise ValueError(f"File {filename} is too recent for this version of {self.__class__}.")
-            return artifact
-
-    def _write_tensor(self, tensor, name, dir):
-        filename = Path(dir) / f"{name}.pt"
-        with open(filename, "wb") as f:
-            torch.save((self.VERSION, tensor), f, pickle_module=dill)
-
-    def read(self, dir: PathOrStr) -> GenOut:
-        hs = self._read_tensor('hidden_states', dir)
-        ps = self._read_tensor('probabilities', dir)
-        y = self._read_tensor('labels', dir)
-
-        # metadata
-        # filename = Path(dir) / "metadata.json"
-        # with open(filename, 'r') as f:
-        #     meta = json.load(f)
-
-        # return hs, ps, y, meta
-        return hs, ps, y
-
-    def write(self, artifact: GenOut, dir: PathOrStr):
-        # hs, ps, y, meta = artifact
-        hs, ps, y = artifact
-        self._write_tensor(hs, 'hidden_states', dir)
-        self._write_tensor(ps, 'probabilities', dir)
-        self._write_tensor(y, 'labels', dir)
-
-        # metadata
-        # filename = Path(dir) / "metadata.json"
-        # with open(filename, 'w') as f:
-        #     meta_json = json.dumps(meta, indent=2)
-        #     f.write(meta_json)
-
-
 @Step.register('generate_hidden_states')
 class Generate(Step[GenOut]):
-    FORMAT = ModelForwardOutputsFormat()
+    FORMAT = TupleFormat(formats=(f := TorchFormat(), f, f))
     DETERMINISTIC = True
 
     @property

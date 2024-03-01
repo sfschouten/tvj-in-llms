@@ -13,6 +13,7 @@ from tango.common import DatasetDict, Registrable
 from tango.integrations.torch import TorchFormat
 
 import torch
+import torch.nn.functional as F
 
 from generate import GenOut
 from probe_train import LR, CCS, CCReflection
@@ -25,8 +26,10 @@ ProbeResults = tuple["BeliefProbe", Labels, Probabilities, Direction]
 
 @Step.register('create_splits')
 class CreateSplits(Step[GenOut]):
+    VERSION = "001"
+    CACHEABLE = False
 
-    def run(self, gen_out: GenOut, layer_index: int = 0) -> DatasetDict[GenOut]:
+    def run(self, gen_out: GenOut, layer_index: int) -> DatasetDict[GenOut]:
         # Very simple train/test split (using the fact that the data is already shuffled)
         hs, ps, y = gen_out
         hs = hs[..., layer_index]
@@ -87,32 +90,49 @@ class BeliefProbe(Registrable, ABC):
     def train(self, gen_out: GenOut) -> float:
         raise NotImplementedError
 
-    @abstractmethod
-    def eval(self, gen_out: GenOut) -> Probabilities:
-        raise NotImplementedError
+    def eval(self, eval_data: GenOut) -> tuple[Probabilities, float]:
+        hs, ps, y = eval_data
+        neg_hs, pos_hs = hs[0], hs[1]
+
+        theta = F.normalize(self.get_direction(), dim=0)
+        neg_ps = torch.sigmoid(neg_hs @ theta)
+        pos_ps = torch.sigmoid(pos_hs @ theta)
+        ps = (pos_ps + (1 - neg_ps)) / 2
+        acc = ((ps > 0.5) == y).float().mean()
+
+        print(f'Accuracy: {acc}')
+        return ps, acc
 
     @abstractmethod
     def get_direction(self) -> Direction:
         raise NotImplementedError
 
-    def calc_calibration_scalar(self, data: GenOut):
-        hs, _, _ = data
+    def calc_calibration_params(self, train_data: GenOut, calibration_data: GenOut, scale: float = 1):
+        _, _, y = calibration_data
+        probs, _ = self.eval(calibration_data)
+        logits = torch.logit(probs, eps=1e-6)
 
-        probs = self.eval(data)
-        abs_logits = torch.logit(probs).abs()
-        pth80 = abs_logits.quantile(q=.8)
+        # to scale logits
+        std = torch.std(logits)
+        self.scale = scale * torch.logit(torch.tensor(0.75)) / std
 
-        # to scale logits such that probability for 80pth is 80%
-        self.calibration_scalar = torch.logit(torch.tensor(0.8)) / pth80
+        # to flip predictions in favor of probe
+        _, acc = self.eval(train_data)
+        self.sign = -1 if acc < 0.5 else 1
+
+    def calibrate_logits(self, logits):
+        return self.sign * logits * self.scale
 
 
 @Step.register('train_belief_probe')
 class TrainBeliefProbe(Step[BeliefProbe]):
-    VERSION = "005"
+    VERSION = "021"
 
-    def run(self,  data: DatasetDict[GenOut], probe: BeliefProbe, **kwargs) -> BeliefProbe:
-        probe.train_loss = probe.train(data['train'])
-        probe.calc_calibration_scalar(data['train'])
+    def run(
+        self,  train_data: DatasetDict[GenOut], calibration_data: DatasetDict[GenOut], probe: BeliefProbe, **kwargs
+    ) -> BeliefProbe:
+        probe.train_loss = probe.train(train_data['train'])
+        probe.calc_calibration_params(train_data['train'], calibration_data['train'])
         probe.config = self.config['probe']
         probe.train_step_name = self.name
         return probe
@@ -131,14 +151,14 @@ class SelectBest(Step[list[BeliefProbe]]):
 @Step.register('eval_belief_probe')
 class EvalBeliefProbe(Step[ProbeResults]):
     FORMAT = TorchFormat
-    VERSION = "004a"
+    VERSION = "009"
 
     def run(self,  data: DatasetDict[GenOut], probe: BeliefProbe, **kwargs) -> ProbeResults:
-        probs = probe.eval(data['eval'])
+        probs, acc = probe.eval(data['eval'])
 
         # calibrate predictions
         logits = torch.logit(probs)
-        logits *= probe.calibration_scalar
+        logits = probe.calibrate_logits(logits)
         new_probs = torch.sigmoid(logits)
 
         return probe, data['eval'][2], new_probs, probe.get_direction()
@@ -157,7 +177,7 @@ class LMHeadBaseline(BeliefProbe):
     def train(self, gen_out: GenOut) -> None:
         pass
 
-    def eval(self, gen_out: GenOut) -> Probabilities:
+    def eval(self, gen_out: GenOut) -> tuple[Probabilities, float]:
         _, ps, y = gen_out
         neg_ps, pos_ps = tuple(x.squeeze() for x in ps.split(1))
 
@@ -168,15 +188,15 @@ class LMHeadBaseline(BeliefProbe):
 
         if self.calibrate:
             neg_ps -= np.median(neg_ps - pos_ps)
-            lm_cal_acc = ((pos_ps > neg_ps) == y).float().mean()
+            acc = ((pos_ps > neg_ps) == y).float().mean()
             pred = normalize_preds(pos_ps, neg_ps)
-            print(f'LM Head calibrated acc: {lm_cal_acc}')
+            print(f'LM Head calibrated acc: {acc}')
         else:
-            lm_acc = ((pos_ps > neg_ps) == y).float().mean()
+            acc = ((pos_ps > neg_ps) == y).float().mean()
             pred = normalize_preds(pos_ps, neg_ps)
-            print(f'LM Head acc: {lm_acc}')
+            print(f'LM Head acc: {acc}')
 
-        return pred
+        return pred, acc
 
     def get_direction(self) -> Direction:
         return None
@@ -191,7 +211,7 @@ class LogisticRegressionSKLearn(BeliefProbe):
 
     def __init__(self, class_weight: str = 'balanced'):
         super().__init__()
-        self.lr = LogisticRegression(class_weight=class_weight)
+        self.lr = LogisticRegression(class_weight=class_weight, fit_intercept=False)
 
     def train(self, train_data: GenOut) -> None:
         hs, ps, y = train_data
@@ -201,16 +221,8 @@ class LogisticRegressionSKLearn(BeliefProbe):
             warnings.simplefilter(action='ignore', category=ConvergenceWarning)
             self.lr.fit(x, y)
 
-    def eval(self, eval_data: GenOut) -> Probabilities:
-        hs, ps, y = eval_data
-        neg_hs, pos_hs = hs[0], hs[1]
-        x = neg_hs - pos_hs
-        acc = self.lr.score(x, y)
-        print(f'logistic regression (sklearn) accuracy: {acc}')
-        return torch.tensor(self.lr.predict_proba(x)[:, 1])
-
     def get_direction(self) -> Direction:
-        return torch.tensor(self.lr.coef_).squeeze()
+        return torch.tensor(self.lr.coef_).squeeze().float().cpu()
 
 
 @BeliefProbe.register('lr_gd')
@@ -238,14 +250,8 @@ class LogisticRegressionGradientDescent(BeliefProbe):
         hs, ps, y = gen_out
         return self.lr.train(hs[0], hs[1], y)
 
-    def eval(self, gen_out: GenOut) -> Probabilities:
-        hs, ps, y = gen_out
-        acc, result = self.lr.get_acc(hs[0], hs[1], y)
-        print(f'logistic regression (gradient descent) accuracy: {acc}')
-        return result
-
     def get_direction(self) -> Direction:
-        return self.lr.probe._modules['0'].weight.data.squeeze()
+        return self.lr.probe._modules['0'].weight.data.squeeze().cpu()
 
 
 @BeliefProbe.register('ccs_gd')
@@ -268,14 +274,8 @@ class ContrastConsistentSearchGradientDescent(BeliefProbe):
         hs, ps, y = gen_out
         return self.ccs.train(hs[0], hs[1], y)
 
-    def eval(self, gen_out: GenOut) -> Probabilities:
-        hs, ps, y = gen_out
-        acc, result = self.ccs.get_acc(hs[0], hs[1], y)
-        print(f'ccs (gradient descent) accuracy: {acc}')
-        return result
-
     def get_direction(self) -> Direction:
-        return self.ccs.probe._modules['0'].weight.data.squeeze()
+        return self.ccs.probe._modules['0'].weight.data.squeeze().cpu()
 
 
 @BeliefProbe.register('ccs_linear')
@@ -318,23 +318,13 @@ class ContrastConsistentSearchLinearized(BeliefProbe):
         )
         self.theta = result.x @ Vt[:len(result.x)]
 
-    def eval(self, gen_out: GenOut) -> Probabilities:
-        hs, _, y = gen_out
-        neg_hs, pos_hs = hs[0], hs[1]
-
-        pred = (neg_hs @ self.theta - pos_hs @ self.theta) > 0
-
-        acc = (pred == y).float().mean()
-        print(f'ccs_linear accuracy: {acc}')
-
-        return pred
-
     def get_direction(self) -> Direction:
         return torch.tensor(self.theta).squeeze()
 
 
 @BeliefProbe.register('ccr')
 class ContrastConsistentReflection(BeliefProbe):
+
     def __init__(self, seed: int, n_epochs=1000, lr=1e-3, batch_size=-1, verbose=False, device="cuda",
                  weight_decay=0.01, use_wandb=False, wandb_group=None):
         super().__init__()
@@ -352,14 +342,8 @@ class ContrastConsistentReflection(BeliefProbe):
         hs, ps, y = gen_out
         return self.ccr.train(hs[0], hs[1], y)
 
-    def eval(self, gen_out: GenOut) -> Probabilities:
-        hs, ps, y = gen_out
-        acc, result = self.ccr.get_acc(hs[0], hs[1], y)
-        print(f'ccr (gradient descent) accuracy: {acc}')
-        return result
-
     def get_direction(self) -> Direction:
-        return self.ccr.probe._modules['0'].weight.data.squeeze()
+        return self.ccr.probe._modules['0'].weight.data.squeeze().cpu()
 
 
 @BeliefProbe.register('mass_mean')
@@ -394,29 +378,11 @@ class MassMeanProbe(BeliefProbe):
             # self.tilt_mat = torch.linalg.inv(Sigma)
             self.tilt_mat = torch.linalg.pinv(Sigma, hermitian=True, atol=1e-3)
 
-    def eval(self, gen_out: GenOut) -> Probabilities:
-        hs, _, y = gen_out
-        neg_hs, pos_hs = hs[0], hs[1]
-
-        theta = self.get_direction()
-
-        # neg_pred = torch.sigmoid(neg_hs @ theta)
-        # pos_pred = 1 - torch.sigmoid(pos_hs @ theta)
-        # pred = ((neg_pred + pos_pred) / 2) > 0.5
-        logits = ((pos_hs @ theta - neg_hs @ theta) / 2)
-        ps = torch.sigmoid(logits)
-        pred = ps > 0
-
-        acc = (pred == y).float().mean()
-        print(f'mass-mean (iid={self.iid}) accuracy: {acc}')
-
-        return ps
-
     def get_direction(self) -> Direction:
         if self.iid:
-            return (self.tilt_mat @ self.theta).squeeze()
+            return (self.tilt_mat @ self.theta).squeeze().cpu()
         else:
-            return self.theta.squeeze()
+            return self.theta.squeeze().cpu()
 
 
 @BeliefProbe.register('unsupervised_mass_mean')
@@ -441,18 +407,5 @@ class UnsupervisedMassMeanProbe(BeliefProbe):
         # the final direction is simply the (mean of true-false) - (mean of false-true)
         self.theta = (deltas[y].mean(dim=0) - deltas[~y].mean(dim=0)) / 2
 
-    def eval(self, gen_out: GenOut) -> Probabilities:
-        hs, _, y = gen_out
-        neg_hs, pos_hs = hs[0], hs[1]
-
-        pred = ((pos_hs @ self.theta - neg_hs @ self.theta) / 2)
-
-        acc = ((pred > 0) == y).float().mean()
-        print(f'unsupervised mass-mean accuracy: {acc}')
-        if acc < 0.5:
-            self.theta = -self.theta
-
-        return torch.sigmoid(pred)
-
     def get_direction(self) -> Direction:
-        return self.theta.squeeze()
+        return self.theta.squeeze().cpu()

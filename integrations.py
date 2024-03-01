@@ -9,7 +9,7 @@ from duckdb import DuckDBPyConnection
 from tango import Format, Step
 from tango.common import Registrable, PathOrStr
 from tango.integrations.torch.model import Model
-from tango.integrations.transformers import Config
+from tango.integrations.transformers import Config, Tokenizer
 
 import torch
 import numpy as np
@@ -17,7 +17,7 @@ import numpy as np
 from transformers.utils.quantization_config import QuantizationConfigMixin
 from transformers.models.auto import modeling_auto
 from transformers import GPTQConfig as GPTQConfigOriginal
-
+from transformers import AutoTokenizer
 
 # QUANTIZATION
 
@@ -33,7 +33,7 @@ QuantizationConfig.register('gptq-config')(GPTQConfigOriginal)
 # TODO register other quantization configs
 
 
-# override default `from_pretrained` wrappers
+# Override default `from_pretrained` wrappers
 
 
 def auto_model_wrapper_factory(cls: type) -> tuple[Type[Model], Type[Step[Model]]]:
@@ -84,22 +84,24 @@ for name, cls in modeling_auto.__dict__.items():
         Step.register(name_prefix + "from_pretrained::step")(loader_cls)
 
 
-@Step.register('load_model')
-class LoadModel(Step[Model]):
+# same dummy step but for tokenizer
+@Step.register('transformers::AutoTokenizer::from_pretrained::step')
+class AutoTokenizerLoader(Step):
     CACHEABLE = False
 
-    def run(self, model: Model) -> Model:
-        return model
+    def run(self, **kwargs) -> Tokenizer:
+        return AutoTokenizer.from_pretrained(**kwargs)
 
 
 class TupleFormat(Format[tuple]):
 
-    def __init__(self, formats: tuple[Format]):
+    def __init__(self, formats: tuple[Format, ...]):
         self.formats = formats
 
     def write(self, artifact: tuple, dir: PathOrStr):
         for i, (elem, format) in enumerate(zip(artifact, self.formats)):
             subdir = Path(dir) / f'elem_{i}'
+            subdir.mkdir(exist_ok=True)
             format.write(elem, subdir)
 
     def read(self, dir: PathOrStr) -> tuple:
