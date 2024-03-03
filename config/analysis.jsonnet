@@ -1,14 +1,21 @@
-local main = import 'main.jsonnet';
+local dataset = std.extVar('dataset');
 
-local all_steps = main.steps_model_func('llama-7b', std.range(1, 32));
-//local all_steps = main.steps_model_func('llama-7b', [1, 3, 5, 7, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 25, 27, 29, 31]);
-//local all_steps = main.steps_model_func('llama-7b', [16, 17]);
-local other_steps = all_steps['other_steps'];
-local train_steps = all_steps['train_steps'];
-local eval_steps = all_steps['eval_steps'];
+local utils = import 'utils.libsonnet';
+local common = import 'common.libsonnet';
+local data = import 'data.libsonnet';
+local models = import 'models.libsonnet';
 
+
+local all_steps_l = [
+    common.steps_model_func(model_key, models[model_key], data[dataset])
+    for model_key in std.objectFields(models)
+//    for dataset_config in std.objectValues(data)
+];
+
+local train_steps = utils.join_objects([s['train_steps'] for s in all_steps_l]);
+local eval_steps = utils.join_objects([s['eval_steps'] for s in all_steps_l]);
 {
-	"steps": other_steps + train_steps + eval_steps + {
+	"steps": train_steps + eval_steps + {
 	    'results_db': {
 	        "type": "duckdb_builder",
 	        result_inputs: std.objectKeysValues(eval_steps),
@@ -17,10 +24,6 @@ local eval_steps = all_steps['eval_steps'];
 	            std.objectFields(eval_steps)
 	        ),
 	    },
-//	    'direction_similarites': {
-//	        "type": "direction_similarity",
-//	        db: {'ref': 'results_db'},
-//	    },
         'df': {
             type: 'prepare_dataframe',
             db: {ref: 'results_db'},

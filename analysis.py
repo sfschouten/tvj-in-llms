@@ -29,7 +29,7 @@ PRIMITIVES = (bool, str, int, float)
 @Step.register('duckdb_builder')
 class DuckDBBuilder(Step[DuckDBPyConnection]):
     FORMAT = DuckDBFormat
-    VERSION = '016'
+    VERSION = '018'
 
     def run(self, result_inputs: list, results: list[ProbeResults]) -> DuckDBPyConnection:
         dependencies_by_name = {step.name: step for step in self.dependencies}
@@ -63,6 +63,7 @@ class DuckDBBuilder(Step[DuckDBPyConnection]):
             ] + [
                 {f'PROBE_{key}': value for key, value in result[0].config.items()}
                 | {'EVAL_STEP_NAME': step.name}
+                | {f'EVAL_STEP_NAME_@.0': step.name.split('@')[-1].split('|')[0]}
                 | {
                     f'TRAIN_STEP_NAME.{i}': part
                     for i, part in enumerate(result[0].train_step_name.split('|'))
@@ -73,7 +74,7 @@ class DuckDBBuilder(Step[DuckDBPyConnection]):
 
         # create groups of results to analyse together.
         for info_dict in info:
-            keys = set(info_dict.keys()) - {'EVAL_STEP_NAME'}
+            keys = set(info_dict.keys()) - {'EVAL_STEP_NAME', 'EVAL_STEP_NAME_@.0'}
             probe_details = {key for key in info_dict.keys() if key.startswith('PROBE')}
             # results that only differ in the data variant used for training/evaluation belong to the same level 0 group
             excl = [{
@@ -81,9 +82,9 @@ class DuckDBBuilder(Step[DuckDBPyConnection]):
                 'eval_LoadData_prompt_name', 'eval_LoadData_dataset_config_name',
             } | probe_details]
             # level 1 groups consist of level 0 groups that also differ in probe type
-            excl.append(excl[0] | {'TRAIN_STEP_NAME.4', 'train_Normalize_var_normalize', 'eval_Normalize_var_normalize'
-                                    # 'eval_CreateSplits_layer_index'
-                                   })
+            excl.append(excl[0] | {
+                'TRAIN_STEP_NAME.4', 'train_Normalize_var_normalize', 'eval_Normalize_var_normalize'
+            })
             for lvl, lvl_excl in enumerate(excl):
                 values = [str(info_dict[key]) for key in sorted(keys - lvl_excl)]
                 info_dict[f'data_group_l{lvl}_id'] = hashlib.sha256("".join(values).encode('utf8')).hexdigest()
@@ -128,7 +129,7 @@ ERR_COLS = ['error_sv', 'error_1', 'error_2', 'error_3', 'error_4']
 
 @Step.register('prepare_dataframe')
 class PrepareDataframe(Step):
-    VERSION = "002"
+    VERSION = "003"
 
     def run(self, db: DuckDBPyConnection, **kwargs) -> pd.DataFrame:
         df: DataFrame = db.sql("SELECT * FROM results").df()
@@ -145,21 +146,14 @@ class PrepareDataframe(Step):
             'eval_LoadData_prompt_name': 'eval_prompt',
             'eval_LoadData_dataset_config_name': 'eval_config',
         })
-        df['premise_asserted'] = ~df['eval_prompt'].str.endswith('-premise_negated')
-        df['premise_origin'] = df['eval_config'].replace({
-            'no_neutral_shuffle_premises': 'shuffled',
-            'no_neutral_random_bits': 'random',
-            'no_neutral': 'original'
-        })
-
-        # set the origin of -hypothesis-only prompts to 'no-premise'
-        df.loc[df['eval_prompt'].str.endswith('-hypothesis_only'), 'premise_origin'] = 'no-premise'
+        df['premise_asserted'] = ~df['EVAL_STEP_NAME_@.0'].str.endswith('neg_prem')
+        df['premise_origin'] = df['EVAL_STEP_NAME_@.0'].str.extract(r'\w-([a-z]*)_.*')
 
         # create column to mark which rows were trained and evaluated on the same type of data
         df['same_variant'] = (df['eval_prompt'] == df['train_prompt']) & (df['eval_config'] == df['train_config'])
 
         # create groups (the positive-premise runs go in both groups)
-        pos_origin_idx = (df['premise_origin'] == 'original') & (df['eval_prompt'].str.endswith('-full'))
+        pos_origin_idx = df['EVAL_STEP_NAME_@.0'].str.endswith('-original_pos_prem')
         df['same_variant_grp'] = df['same_variant'] | pos_origin_idx
         df['pos_origin_variant_grp'] = ~df['same_variant'] | pos_origin_idx
 
@@ -172,7 +166,7 @@ class PrepareDataframe(Step):
 @Step.register('calc_error_scores')
 class CalculateErrorScores(Step[DuckDBPyConnection]):
     FORMAT = DuckDBFormat
-    VERSION = "012"
+    VERSION = "013a"
 
     def run(self, df: pd.DataFrame, **kwargs) -> DuckDBPyConnection:
         subgroup_aggr_stats = {}
@@ -185,12 +179,11 @@ class CalculateErrorScores(Step[DuckDBPyConnection]):
             # each level-0 group also have the same probe-type
             for l0_name, l0_df in l1_df.groupby(by='data_group_l0_id'):
                 # select the row corresponding to the run that was evaluated on the original, positive premises
-                original_pos = l0_df[(l0_df['premise_origin'] == 'original')
-                                     & l0_df['eval_prompt'].str.endswith('-full')]
+                original_pos = l0_df[l0_df['EVAL_STEP_NAME_@.0'].str.endswith('-original_pos_prem')]
 
                 def process_subgroup(sgr_df, sg_name):
                     a, o = sgr_df['premise_asserted'], sgr_df['premise_origin']
-                    h_nly_i = sgr_df[sgr_df['eval_prompt'].str.endswith('-hypothesis_only')].index
+                    h_nly_i = sgr_df[sgr_df['premise_origin'] == 'no'].index
 
                     # predictions
                     hyp_only_pred_vals = sgr_df.loc[h_nly_i].prediction.values[0]
@@ -200,7 +193,7 @@ class CalculateErrorScores(Step[DuckDBPyConnection]):
                     pe = o_pos_vals - hyp_only_pred_vals
 
                     # === ERRORS ===
-                    for origin, error_i in [('random', 1), ('shuffled', 2)]:
+                    for origin, error_i in [('random', 1), ('shuffle', 2)]:
                         for asserted in [True, False]:
                             # error types 1 & 2
                             bl_i = sgr_df[(o == origin) & (a == asserted)].index
@@ -234,7 +227,7 @@ class CalculateErrorScores(Step[DuckDBPyConnection]):
                                 lambda x: pd.NA if x is None else x.mean()
                             )
                             df.loc[sgr_df.index, 'trim_mean_' + col] = df.loc[sgr_df.index, col].apply(
-                                lambda x: pd.NA if x is None else stats.trim_mean(x, 0.05)
+                                lambda x: pd.NA if x is None else stats.trim_mean(x, 0.1)
                             )
                             df.loc[sgr_df.index, '10pth_' + col] = df.loc[sgr_df.index, col].apply(
                                 lambda x: pd.NA if x is None else np.percentile(x, 10)
