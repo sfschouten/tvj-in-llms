@@ -8,6 +8,8 @@ from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.cluster import AgglomerativeClustering
 
+import cvxopt
+
 from tango import Step
 from tango.common import DatasetDict, Registrable
 from tango.integrations.torch import TorchFormat
@@ -317,6 +319,56 @@ class ContrastConsistentSearchLinearized(BeliefProbe):
             # bounds=(1., np.inf)
         )
         self.theta = result.x @ Vt[:len(result.x)]
+
+    def get_direction(self) -> Direction:
+        return torch.tensor(self.theta).squeeze()
+
+
+@BeliefProbe.register('ccs_convex')
+class ContrastConsistentSearchConvex(BeliefProbe):
+
+    def train(self, gen_out: GenOut) -> None:
+        hs, _, _ = gen_out
+        Xp, Xn = hs[0].double(), hs[1].double()
+
+        def obj(w):
+            y = (1 - torch.sigmoid(Xp @ w) + torch.sigmoid(Xn @ w)) ** 2
+            return y.sum()
+
+        def c1(w):
+            return torch.min((Xp - Xn) @ w)**2 - 1
+
+        # def c2(w):
+        #     return (Xn @ w)**2 - 1
+
+        def F(w=None, z=None):
+            if w is None:
+                return 1, cvxopt.matrix(np.ones(Xp.shape[1]))
+
+            w_t = torch.tensor(np.array(w))
+            f = cvxopt.matrix(np.array([
+                obj(w_t).item(),
+                c1(w_t).item(),
+                # c2(w_t).float().numpy()
+            ]))
+            Df = cvxopt.matrix(np.concatenate([
+                torch.func.grad(obj)(w_t).T.numpy(),
+                torch.func.grad(c1)(w_t).T.numpy(),
+            ]))
+
+            if z is None:
+                return f, Df
+
+            H = cvxopt.matrix((
+                z[0] * torch.func.hessian(obj)(w_t.squeeze())
+                + z[1] * torch.func.hessian(c1)(w_t.squeeze())
+                # + z[3] * torch.func.hessian(c2)(torch.tensor(w)),
+            ).numpy())
+
+            return f, Df, H
+
+        result = cvxopt.solvers.cp(F)
+        self.theta = 0
 
     def get_direction(self) -> Direction:
         return torch.tensor(self.theta).squeeze()

@@ -103,17 +103,17 @@ local usv_method_train_steps(data_key, model_key, layer) =
             calibration_data: {"ref": calibration_prefix+"normalized_hidden_states"},
             probe: {"type": "ccr", seed: 0},
         }
-//    } + ccs_trials + {
-//        [prefix + 'train|ccs']: {
-//            "type": "select_best",
-//            train_data: {"ref": prefix+"normalized_hidden_states"},
-//            calibration_data: {"ref": calibration_prefix+"normalized_hidden_states"},
-//            probes: [
-//                {"ref": prefix + 'trial|' + 'ccs_' + seed}
-//                for seed in CCS_SEEDS
-//            ],
-//            probe_configs: std.objectKeysValues(ccs_trials)
-//        }
+    } + ccs_trials + {
+        [prefix + 'train|ccs']: {
+            "type": "select_best",
+            train_data: {"ref": prefix+"normalized_hidden_states"},
+            calibration_data: {"ref": calibration_prefix+"normalized_hidden_states"},
+            probes: [
+                {"ref": prefix + 'trial|' + 'ccs_' + seed}
+                for seed in CCS_SEEDS
+            ],
+            probe_configs: std.objectKeysValues(ccs_trials)
+        }
     } + {
 //        [prefix + 'train|' + 'ccs_linear-prio=' + prio]: {
 //            "type": "train_belief_probe",
@@ -168,14 +168,14 @@ local steps_model(model_key, model_config, dataset_config) =
 
     # load model
     local model_step = {
-        "model": {
+        [model_key]: {
             type: "transformers::AutoModelForCausalLM::from_pretrained::step",
             pretrained_model_name_or_path: model_config['key'],
             device_map: {"": "cuda:0"},
             torch_dtype: "float16",
             revision: model_config['revision'],
         },
-        "tokenizer": {
+        [model_key + "-tokenizer"]: {
             type: "transformers::AutoTokenizer::from_pretrained::step",
             pretrained_model_name_or_path: model_config['key'],
         }
@@ -187,7 +187,8 @@ local steps_model(model_key, model_config, dataset_config) =
 
     # load data and obtain hidden states
     local data_steps = join_objects([
-        data_gen_steps(data['key'], data['value'], model_key, model_config, {"ref": "model"}, {"ref": "tokenizer"})
+        data_gen_steps(data['key'], data['value'], model_key, model_config,
+                        {"ref": model_key}, {"ref": model_key + "-tokenizer"})
         for data in std.objectKeysValues(dataset_config)
     ]);
 
@@ -245,8 +246,8 @@ local steps_model(model_key, model_config, dataset_config) =
             },
             probe: {"ref": probe_obj['key']},
         }
-        for data_key in std.objectFields(dataset_config)
         for probe_obj in std.objectKeysValues(sv_train_steps)
+        for data_key in std.objectFields(dataset_config)
         if std.length(std.findSubstr('train', probe_obj['key'])) > 0    # skip individual trials
     };
 

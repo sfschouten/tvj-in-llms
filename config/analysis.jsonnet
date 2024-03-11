@@ -9,7 +9,6 @@ local models = import 'models.libsonnet';
 local all_steps_l = [
     common.steps_model_func(model_key, models[model_key], data[dataset])
     for model_key in std.objectFields(models)
-//    for dataset_config in std.objectValues(data)
 ];
 
 local train_steps = utils.join_objects([s['train_steps'] for s in all_steps_l]);

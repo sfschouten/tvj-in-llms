@@ -157,6 +157,7 @@ class ContrastDataset(Dataset):
 @Step.register('load_data')
 class LoadData(Step[Dataset]):
     DETERMINISTIC = True
+    CACHEABLE = False       # already cached by HuggingFace datasets
 
     def run(self, dataset_name: str, split: str, tokenizer: Tokenizer, prompt_i: int = None, prompt_name: str = None,
             num_examples: int = 1000, dataset_config_name: str = None, model_type: str = "encoder_decoder",

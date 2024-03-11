@@ -180,6 +180,7 @@ GenOut = tuple[HiddenStates, Logits, Labels]
 class Generate(Step[GenOut]):
     FORMAT = TupleFormat(formats=(f := TorchFormat(), f, f))
     DETERMINISTIC = True
+    VERSION = "001"
 
     @property
     def unique_id(self) -> str:

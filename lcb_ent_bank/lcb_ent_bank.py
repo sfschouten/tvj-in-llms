@@ -35,7 +35,7 @@ class EntBankForLCBConfig(datasets.BuilderConfig):
 
 class SimpleEntBank(datasets.GeneratorBasedBuilder):
 
-    VERSION = datasets.Version("0.0.1")
+    VERSION = datasets.Version("0.1.1")
 
     IN_COMMON = dict(version=VERSION, ent_bank_version='v3')
     BUILDER_CONFIGS = [
@@ -167,11 +167,9 @@ class SimpleEntBank(datasets.GeneratorBasedBuilder):
 
             ps = premises_fn(data)
             h = data['hypothesis']
-            # q = data['meta']['question_text']
-            q = data['question_and_answers']
 
             wrong_answers = [
-                (d['label'], d['text'])
+                (d['label'], d['text'].replace('.', ''))
                 for d in data['question_json']['choices']
                 if d['label'] != data['answerKey']
             ]
@@ -180,7 +178,20 @@ class SimpleEntBank(datasets.GeneratorBasedBuilder):
             true_idxs = random.sample(range(len(ps)), k=nr_true)
 
             # return correct and incorrect answers 50/50
-            answers = [((data['answerKey'], data['answer']), 1), (random.choice(wrong_answers), 0)]
+            answers = [
+                ((data['answerKey'], data['answer'].replace('.', '')), 1),
+                (random.choice(wrong_answers), 0)
+            ]
+
+            q = data['meta']['question_text']
+            # q = data['question_and_answers']
+            if '.' in q:
+                continue
+
+            if q.endswith('?'):
+                q = q[:-1]
+            q += ': ' + " or ".join(f"'{a}'" for (_, a), _ in answers) + '?'
+
             for (k, a), l in answers:
                 yield l * len(instances) + key, {
                     "label": l,

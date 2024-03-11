@@ -85,6 +85,10 @@ class DuckDBBuilder(Step[DuckDBPyConnection]):
             excl.append(excl[0] | {
                 'TRAIN_STEP_NAME.4', 'train_Normalize_var_normalize', 'eval_Normalize_var_normalize'
             })
+            # level 2 groups also ignore the layer, so all level 1 trained/evaluated on the same model are merged
+            excl.append(excl[1] | {
+                'TRAIN_STEP_NAME.2', 'eval_CreateSplits_layer_index', 'train_CreateSplits_layer_index'
+            })
             for lvl, lvl_excl in enumerate(excl):
                 values = [str(info_dict[key]) for key in sorted(keys - lvl_excl)]
                 info_dict[f'data_group_l{lvl}_id'] = hashlib.sha256("".join(values).encode('utf8')).hexdigest()
@@ -97,6 +101,7 @@ class DuckDBBuilder(Step[DuckDBPyConnection]):
 
         # store in duckdb
         db = duckdb.connect()
+        db.execute("SET GLOBAL pandas_analyze_sample=100000")
         db.sql('CREATE TABLE results AS SELECT * FROM df')
 
         return db
@@ -124,12 +129,23 @@ def create_figure_name(df, by_layer=True, extension='pdf'):
 
 
 AGGR_TYPES = ['mean', 'median', 'trim_mean', '10pth', '90pth']
-ERR_COLS = ['error_sv', 'error_1', 'error_2', 'error_3', 'error_4']
+# ERR_COLS_1 are sensitive to outliers, require aggregation types other than the mean
+ERR_COLS_1 = ['error_1', 'error_2', 'error_3', 'error_4', 'error_3+4']
+ERR_COLS_2 = ['error_sv']
+ERR_COLS = ERR_COLS_1 + ERR_COLS_2
+OTHER_METRICS = ['accuracy', 'premise_sensitivity', 'rel_error_sv']
+METHOD_MAP = {
+    'lr_sklearn': 'LR',
+    'lm_head_baseline': 'LM-head',
+    'mass_mean': 'MMP',
+    'ccs_gd': 'CCS',
+    'ccr': 'CCR',
+}
 
 
 @Step.register('prepare_dataframe')
 class PrepareDataframe(Step):
-    VERSION = "003"
+    VERSION = "005"
 
     def run(self, db: DuckDBPyConnection, **kwargs) -> pd.DataFrame:
         df: DataFrame = db.sql("SELECT * FROM results").df()
@@ -148,6 +164,7 @@ class PrepareDataframe(Step):
         })
         df['premise_asserted'] = ~df['EVAL_STEP_NAME_@.0'].str.endswith('neg_prem')
         df['premise_origin'] = df['EVAL_STEP_NAME_@.0'].str.extract(r'\w-([a-z]*)_.*')
+        df['PROBE_type'] = df['PROBE_type'].replace(METHOD_MAP)
 
         # create column to mark which rows were trained and evaluated on the same type of data
         df['same_variant'] = (df['eval_prompt'] == df['train_prompt']) & (df['eval_config'] == df['train_config'])
@@ -166,7 +183,7 @@ class PrepareDataframe(Step):
 @Step.register('calc_error_scores')
 class CalculateErrorScores(Step[DuckDBPyConnection]):
     FORMAT = DuckDBFormat
-    VERSION = "013a"
+    VERSION = "015"
 
     def run(self, df: pd.DataFrame, **kwargs) -> DuckDBPyConnection:
         subgroup_aggr_stats = {}
@@ -217,14 +234,18 @@ class CalculateErrorScores(Step[DuckDBPyConnection]):
                     # error type 4
                     df.at[o_neg_i[0], 'error_4'] = abs(o_neg_vals - o_pos_vals) / abs(pe)
 
+                    # error type 3 + 4
+                    df.at[o_neg_i[0], 'error_3+4'] = df.at[h_nly_i[0], 'error_3'] + df.at[o_neg_i[0], 'error_4']
+
                     # calculate aggregates
                     for col in df.columns:
-                        if col.startswith('error_'):
-                            df.loc[sgr_df.index, 'median_' + col] = df.loc[sgr_df.index, col].apply(
-                                lambda x: pd.NA if x is None else np.median(x)
-                            )
+                        if col in ERR_COLS:
                             df.loc[sgr_df.index, 'mean_' + col] = df.loc[sgr_df.index, col].apply(
                                 lambda x: pd.NA if x is None else x.mean()
+                            )
+                        if col in ERR_COLS_1:
+                            df.loc[sgr_df.index, 'median_' + col] = df.loc[sgr_df.index, col].apply(
+                                lambda x: pd.NA if x is None else np.median(x)
                             )
                             df.loc[sgr_df.index, 'trim_mean_' + col] = df.loc[sgr_df.index, col].apply(
                                 lambda x: pd.NA if x is None else stats.trim_mean(x, 0.1)
@@ -250,9 +271,14 @@ class CalculateErrorScores(Step[DuckDBPyConnection]):
 
                     # === METRICS ===
                     # accuracy
-                    metrics = {'accuracy': ((original_pos.prediction.values[0] > 0.5) == labels).mean()}
-                    metrics['error_sv_0'] = np.mean(sv_score_0)
-                    metrics['error_sv_1'] = np.mean(sv_score_1)
+                    metrics = {
+                        'accuracy': ((original_pos.prediction.values[0] > 0.5) == labels).mean(),
+                        'premise_sensitivity': np.mean(abs(pe)),
+                        'mean_premise_effect': np.mean(pe),
+                        'error_sv_0': np.mean(sv_score_0),
+                        'error_sv_1': np.mean(sv_score_1)
+                    }
+                    metrics['rel_error_sv'] = np.mean(sv_score_1 + sv_score_0) / metrics['premise_sensitivity']
 
                     param_values = sgr_df.loc[
                         sgr_df.index[0], sgr_df.columns[sgr_df.applymap(str).nunique() == 1]
@@ -355,8 +381,8 @@ class CalcMetricRanks(Step[DuckDBPyConnection]):
             db.sql(f'''
                 CREATE TEMP TABLE tmp_{rank_name} AS
                     SELECT data_group_l0_id, same_variant, "{score_name}",
-                        row_number() OVER (PARTITION BY data_group_l1_id, same_variant 
-                                           ORDER BY "{score_name}" DESC) AS rank
+                        row_number() OVER (PARTITION BY data_group_l2_id, same_variant 
+                                           ORDER BY "{score_name}" ASC) AS rank
                     FROM aggr_stats;
             
                 UPDATE aggr_stats AS l
@@ -381,7 +407,7 @@ class CalcMetricRanks(Step[DuckDBPyConnection]):
 
 @Step.register('plot_metrics')
 class PlotMetrics(Step):
-    VERSION = "008"
+    VERSION = "013"
 
     def run(self, db: DuckDBPyConnection):
         df = db.sql("SELECT * FROM aggr_stats").df()
@@ -392,23 +418,35 @@ class PlotMetrics(Step):
             # line plot for each independent metric, layers on x, metric on y, method as hue
             metrics = ['accuracy']
             IND_AGGR = ['mean', 'trim_mean', 'median']
-            ERR = [f'error_{i}' for i in range(1, 5)] + ['error_sv']
-            metrics += [f'{t}_{e}' for e in ERR for t in IND_AGGR]
+            metrics = list(OTHER_METRICS)
+            metrics += [f'{t}_{e}' for e in ERR_COLS for t in IND_AGGR]
             for metric in metrics:
                 plt.figure()
                 ax = sns.lineplot(x="train_CreateSplits_layer_index", y=metric, hue="PROBE_type", data=grp_df)
                 filename = metric + "_" + base_name
-                ax.figure.savefig(self.work_dir.parent / filename, format='pdf', dpi=300)
+                plot = so.Plot(
+                    grp_df,
+                    x='train_CreateSplits_layer_index', y=metric, color='PROBE_type'
+                ).add(so.Line()).scale(
+                    color=so.Nominal(order=sorted(METHOD_MAP.values()))
+                ).label(
+                    x='Layer', y=metric.replace('_', ' ').capitalize(), color='Method'
+                )
+                plot.save(
+                    self.work_dir.parent / filename, format='pdf', dpi=300, bbox_inches='tight'
+                )
 
             # add also 10pth - median - 90pth
-            for e in ERR:
+            for e in ERR_COLS:
                 plt.figure()
                 plot = so.Plot(
                     grp_df,
                     x="train_CreateSplits_layer_index",
                     y=f'median_{e}', ymin=f'10pth_{e}', ymax=f'90pth_{e}',
                     color='PROBE_type'
-                ).add(so.Line(linewidth=2)).add(so.Band(edgewidth=1))
+                ).add(so.Line(linewidth=2)).add(so.Band(edgewidth=1)).scale(
+                    color=so.Nominal(order=sorted(METHOD_MAP.values()))
+                ).label(x='Layer', color='Method')
                 plot.save(
                     self.work_dir.parent / f'median_pth_{e}_{base_name}',
                     format='pdf', dpi=300, bbox_inches='tight'
@@ -417,9 +455,9 @@ class PlotMetrics(Step):
 
 @Step.register('plot_e3_e4')
 class PlotE3E4(Step):
-    VERSION = "005"
+    VERSION = "014"
 
-    def run(self, db: DuckDBPyConnection, aggr_type: str = "median"):
+    def run(self, db: DuckDBPyConnection, aggr_type: str = "trim_mean"):
         df = db.sql("SELECT * FROM aggr_stats").df()
 
         for grp_name, grp_df in df.groupby(by=['same_variant_grp']):
@@ -432,6 +470,10 @@ class PlotE3E4(Step):
                 x=f'{aggr_type}_error_3', y=f'{aggr_type}_error_4', marker='PROBE_type',
                 color='train_CreateSplits_layer_index'
             ).add(so.Dots())
+            ).add(so.Dots()).layout(size=(7, 2)).label(
+                x=aggr_type + ' E3', y=aggr_type + ' E4', color='Layer', marker='Method'
+            ).scale(marker=so.Nominal(order=sorted(METHOD_MAP.values())))
+
             plot.save(
                 self.work_dir.parent / ('E3_E4_scatter' + base_name),
                 format='pdf', dpi=300, bbox_inches='tight'
@@ -443,7 +485,12 @@ class PlotE3E4(Step):
             plot = so.Plot(
                 grp_df,
                 x='train_CreateSplits_layer_index', y='log_ratio', color='PROBE_type'
-            ).add(so.Line()).layout(size=(7, 3))
+            ).add(so.Line()).layout(size=(7, 4)).label(
+                x='Layer', y=f'Log(E3/E4)', color='Method'
+            ).scale(
+                color=so.Nominal(order=sorted(METHOD_MAP.values()))
+            ).limit(y=(-5, 3))
+
             plot.save(
                 self.work_dir.parent / ('log_ratio_E3_E4' + base_name),
                 format='pdf', dpi=300, bbox_inches='tight'
