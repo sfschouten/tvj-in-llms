@@ -15,6 +15,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 from integrations import TupleFormat
+from nethook import Trace, TraceDict
 
 
 def get_first_mask_loc(mask, shift=False):
@@ -245,3 +246,18 @@ class Generate(Step[GenOut]):
 
         return hs, ps, y
 
+
+@Step.register('generate_with_intervention')
+class IntervenedGenerate(Generate):
+    VERSION = "001"
+
+    def run(self, model: Model, probe: "BeliefProbe", module_templates: list[str], *args, **kwargs) -> GenOut:
+        theta = probe.get_direction()
+
+        def intervention(output):
+            return output + theta
+
+        with TraceDict(model, module_templates, edit_output=intervention, retain_output=False, retain_input=False):
+            result = super().run(model, *args, **kwargs)
+
+        return result
