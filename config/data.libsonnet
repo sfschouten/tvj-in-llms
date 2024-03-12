@@ -53,46 +53,46 @@ local SPLIT = 'train';
         'entbank-original_pos_prem': {
             name: 'lcb_ent_bank',
             config: 'v3_base_all_true',
-            prompt: 'truth',
+            prompt: 'truth-question',
             split: SPLIT,
         },
         'entbank-original_neg_prem': {
             name: 'lcb_ent_bank',
             config: 'v3_base_all_false',
-            prompt: 'truth',
+            prompt: 'truth-question',
             split: SPLIT,
         },
         // shuffled premises
         'entbank-shuffle_pos_prem': {
             name: 'lcb_ent_bank',
             config: 'v3_distract_all_true',
-            prompt: 'truth',
+            prompt: 'truth-question',
             split: SPLIT,
         },
         'entbank-shuffle_neg_prem': {
             name: 'lcb_ent_bank',
             config: 'v3_distract_all_false',
-            prompt: 'truth',
+            prompt: 'truth-question',
             split: SPLIT,
         },
         // random characters instead of premises
         'entbank-random_pos_prem': {
             name: 'lcb_ent_bank',
             config: 'v3_random_all_true',
-            prompt: 'truth',
+            prompt: 'truth-question',
             split: SPLIT,
         },
         'entbank-random_neg_prem': {
             name: 'lcb_ent_bank',
             config: 'v3_random_all_false',
-            prompt: 'truth',
+            prompt: 'truth-question',
             split: SPLIT,
         },
         // no premise
         'entbank-no_prem': {
             name: 'lcb_ent_bank',
             config: 'v3_none',
-            prompt: 'truth',
+            prompt: 'truth-question',
             split: SPLIT,
         },
     },

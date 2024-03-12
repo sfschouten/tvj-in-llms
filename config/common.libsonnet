@@ -252,11 +252,17 @@ local steps_model(model_key, model_config, dataset_config) =
     };
 
     {
-        "train_steps": model_step + data_steps + usv_train_steps_singles + usv_train_steps_pos_prem + sv_train_steps,
+        "model_step": model_step,
+        "data_steps": data_steps,
+        "train_steps": usv_train_steps_singles + usv_train_steps_pos_prem + sv_train_steps,
         "eval_steps": usv_eval_steps_singles + usv_eval_pos_prem_steps + sv_eval_steps,
     };
 
 
 {
     'steps_model_func': steps_model,
+    'data_gen_steps_func': data_gen_steps,
+    'sv_method_train_steps_func': sv_method_train_steps,
+    'usv_method_train_steps_func': usv_method_train_steps,
+    'create_method_prefix_func': create_method_prefix,
 }

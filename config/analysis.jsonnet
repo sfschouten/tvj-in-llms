@@ -13,8 +13,10 @@ local all_steps_l = [
 
 local train_steps = utils.join_objects([s['train_steps'] for s in all_steps_l]);
 local eval_steps = utils.join_objects([s['eval_steps'] for s in all_steps_l]);
+local model_steps = utils.join_objects([s['model_step'] for s in all_steps_l]);
+local data_steps = utils.join_objects([s['data_steps'] for s in all_steps_l]);
 {
-	"steps": train_steps + eval_steps + {
+	"steps": model_steps + data_steps + train_steps + eval_steps + {
 	    'results_db': {
 	        "type": "duckdb_builder",
 	        result_inputs: std.objectKeysValues(eval_steps),

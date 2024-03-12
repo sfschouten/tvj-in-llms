@@ -35,7 +35,7 @@ class EntBankForLCBConfig(datasets.BuilderConfig):
 
 class SimpleEntBank(datasets.GeneratorBasedBuilder):
 
-    VERSION = datasets.Version("0.1.1")
+    VERSION = datasets.Version("0.1.2")
 
     IN_COMMON = dict(version=VERSION, ent_bank_version='v3')
     BUILDER_CONFIGS = [
@@ -182,6 +182,7 @@ class SimpleEntBank(datasets.GeneratorBasedBuilder):
                 ((data['answerKey'], data['answer'].replace('.', '')), 1),
                 (random.choice(wrong_answers), 0)
             ]
+            random.shuffle(answers)
 
             q = data['meta']['question_text']
             # q = data['question_and_answers']

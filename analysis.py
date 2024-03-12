@@ -407,22 +407,20 @@ class CalcMetricRanks(Step[DuckDBPyConnection]):
 
 @Step.register('plot_metrics')
 class PlotMetrics(Step):
-    VERSION = "013"
+    VERSION = "014"
 
     def run(self, db: DuckDBPyConnection):
         df = db.sql("SELECT * FROM aggr_stats").df()
 
-        for grp_name, grp_df in df.groupby(by=['same_variant_grp']):
+        for grp_name, grp_df in df.groupby(by=['data_group_l2_id', 'same_variant_grp']):
             base_name, _, _ = create_figure_name(grp_df, by_layer=False)
 
             # line plot for each independent metric, layers on x, metric on y, method as hue
-            metrics = ['accuracy']
             IND_AGGR = ['mean', 'trim_mean', 'median']
             metrics = list(OTHER_METRICS)
             metrics += [f'{t}_{e}' for e in ERR_COLS for t in IND_AGGR]
             for metric in metrics:
                 plt.figure()
-                ax = sns.lineplot(x="train_CreateSplits_layer_index", y=metric, hue="PROBE_type", data=grp_df)
                 filename = metric + "_" + base_name
                 plot = so.Plot(
                     grp_df,
@@ -455,12 +453,12 @@ class PlotMetrics(Step):
 
 @Step.register('plot_e3_e4')
 class PlotE3E4(Step):
-    VERSION = "014"
+    VERSION = "016"
 
     def run(self, db: DuckDBPyConnection, aggr_type: str = "trim_mean"):
         df = db.sql("SELECT * FROM aggr_stats").df()
 
-        for grp_name, grp_df in df.groupby(by=['same_variant_grp']):
+        for grp_name, grp_df in df.groupby(by=['data_group_l2_id', 'same_variant_grp']):
             base_name, _, _ = create_figure_name(grp_df, by_layer=False)
 
             # scatter plot with E3 and E4 on x and y, method as mark, and layer as color
@@ -469,10 +467,11 @@ class PlotE3E4(Step):
                 grp_df,
                 x=f'{aggr_type}_error_3', y=f'{aggr_type}_error_4', marker='PROBE_type',
                 color='train_CreateSplits_layer_index'
-            ).add(so.Dots())
-            ).add(so.Dots()).layout(size=(7, 2)).label(
+            ).add(so.Dots()).layout(size=(7, 7)).label(
                 x=aggr_type + ' E3', y=aggr_type + ' E4', color='Layer', marker='Method'
-            ).scale(marker=so.Nominal(order=sorted(METHOD_MAP.values())))
+            ).scale(
+                marker=so.Nominal(order=sorted(METHOD_MAP.values()))
+            ).limit(x=(0, None), y=(0, None))
 
             plot.save(
                 self.work_dir.parent / ('E3_E4_scatter' + base_name),
