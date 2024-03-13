@@ -25,13 +25,13 @@ _URLS = {
 
 class EntBankForLCBConfig(datasets.BuilderConfig):
 
-    def __init__(self, true_proportion, premises, ent_bank_version, **kwargs):
+    def __init__(self, true_proportion, premises, ent_bank_version, seed=0, **kwargs):
         super().__init__(**kwargs)
 
         self.true_proportion = true_proportion
         self.premises = premises
         self.ent_bank_version = ent_bank_version
-
+        self.seed = seed
 
 class SimpleEntBank(datasets.GeneratorBasedBuilder):
 
@@ -127,6 +127,8 @@ class SimpleEntBank(datasets.GeneratorBasedBuilder):
         ]
 
     def _generate_examples(self, filepath):
+        random.seed(self.config.seed)
+
         def get_supports(data):
             triples = data['meta']['triples'] | data['meta']['intermediate_conclusions']
             premise_keys = data['proof'].strip().split(';')[-2].replace('-> hypothesis', '').split('&')

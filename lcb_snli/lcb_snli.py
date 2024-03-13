@@ -23,7 +23,7 @@ RANDOMIZATION_OPTIONS = ['none', 'shuffle_premises', 'random_bits']
 class SNLIForLCBConfig(datasets.BuilderConfig):
 
     def __init__(self, features=('premise', 'hypothesis', 'label'), skip_labels=('contradiction',),
-                 label_map=None, premise_randomization='none', **kwargs):
+                 label_map=None, premise_randomization='none', seed=0, **kwargs):
         super().__init__(**kwargs)
 
         if label_map is None:
@@ -34,6 +34,8 @@ class SNLIForLCBConfig(datasets.BuilderConfig):
         self.label_map = label_map
         self.premise_randomization = premise_randomization
         assert self.premise_randomization in RANDOMIZATION_OPTIONS
+
+        self.seed = seed
 
         self.key = 'lcb_snli_1.0'
 
@@ -103,6 +105,8 @@ class SNLIForLCB(datasets.GeneratorBasedBuilder):
         ]
 
     def _generate_examples(self, filepath):
+        random.seed(self.config.seed)
+
         with open(filepath, encoding='utf-8') as f:
             instances = list(f)
         instances = [json.loads(instance) for instance in instances]
