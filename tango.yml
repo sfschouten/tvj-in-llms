@@ -1,4 +1,5 @@
 workspace:
-  type: local
-  dir: ./workspace
+  type: gs
+  workspace: "tvj-in-llms-tango-workspace"
+  credentials: "../tvj-in-llms-696cd64a95b1.json"
 include_package: ['analysis.py', 'data.py', 'evaluate.py', 'generate.py', 'integrations.py']
