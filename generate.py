@@ -181,6 +181,7 @@ class Generate(Step[GenOut]):
     FORMAT = TupleFormat(formats=(f := TorchFormat(), f, f))
     DETERMINISTIC = True
     VERSION = "001"
+    SKIP_ID_ARGUMENTS = {'batch_size'}
 
     @property
     def unique_id(self) -> str:
