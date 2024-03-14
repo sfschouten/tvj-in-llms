@@ -180,7 +180,7 @@ GenOut = tuple[HiddenStates, Logits, Labels]
 class Generate(Step[GenOut]):
     FORMAT = TupleFormat(formats=(f := TorchFormat(), f, f))
     DETERMINISTIC = True
-    VERSION = "001"
+    VERSION = "002"
     SKIP_ID_ARGUMENTS = {'batch_size'}
 
     @property
