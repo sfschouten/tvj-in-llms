@@ -33,9 +33,10 @@ class EntBankForLCBConfig(datasets.BuilderConfig):
         self.ent_bank_version = ent_bank_version
         self.seed = seed
 
+
 class SimpleEntBank(datasets.GeneratorBasedBuilder):
 
-    VERSION = datasets.Version("0.1.2")
+    VERSION = datasets.Version("0.2.0")
 
     IN_COMMON = dict(version=VERSION, ent_bank_version='v3')
     BUILDER_CONFIGS = [

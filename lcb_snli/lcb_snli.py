@@ -45,7 +45,7 @@ class SNLIForLCBConfig(datasets.BuilderConfig):
 
 class SNLIForLCB(datasets.GeneratorBasedBuilder):
 
-    VERSION = datasets.Version("0.0.1")
+    VERSION = datasets.Version("0.1.0")
 
     BUILDER_CONFIGS = [
         SNLIForLCBConfig(  # removes all independent sentences from dataset
