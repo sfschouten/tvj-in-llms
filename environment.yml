@@ -11,10 +11,10 @@ dependencies:
   - pytorch::pytorch-cuda>=11.8,<12
   - pytorch::torchvision
   - pytorch::torchaudio
-  - defaults::sentencepiece
+  - main::sentencepiece
   - defaults::scikit-learn
   - senyan.dev::cudatoolkit-dev
-  - conda-forge::transformers>=4.30,<5
+  - conda-forge::transformers>=4.38,<5
   - conda-forge::tokenizers
   - conda-forge::datasets>=2.13,<3
   - conda-forge::accelerate=0.20.3
