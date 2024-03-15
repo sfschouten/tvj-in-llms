@@ -141,6 +141,17 @@ METHOD_MAP = {
     'ccs_gd': 'CCS',
     'ccr': 'CCR',
 }
+Y_LIMITS = {
+    'error_1': (0, 2),
+    'error_2': (0, 2),
+    'error_3': (0, 2),
+    'error_4': (0, 2),
+    'error_3+4': (1, 3),
+    'error_sv': (0, 0.6),
+    'accuracy': (0, 1),
+    'premise_sensitivity': (0, 0.6),
+    'rel_error_sv': (0, 1),
+}
 
 
 @Step.register('prepare_dataframe')
@@ -183,7 +194,7 @@ class PrepareDataframe(Step):
 @Step.register('calc_error_scores')
 class CalculateErrorScores(Step[DuckDBPyConnection]):
     FORMAT = DuckDBFormat
-    VERSION = "015"
+    VERSION = "016"
 
     def run(self, df: pd.DataFrame, **kwargs) -> DuckDBPyConnection:
         subgroup_aggr_stats = {}
@@ -248,13 +259,13 @@ class CalculateErrorScores(Step[DuckDBPyConnection]):
                                 lambda x: pd.NA if x is None else np.median(x)
                             )
                             df.loc[sgr_df.index, 'trim_mean_' + col] = df.loc[sgr_df.index, col].apply(
-                                lambda x: pd.NA if x is None else stats.trim_mean(x, 0.1)
+                                lambda x: pd.NA if x is None else stats.trim_mean(x, 0.2)
                             )
-                            df.loc[sgr_df.index, '10pth_' + col] = df.loc[sgr_df.index, col].apply(
-                                lambda x: pd.NA if x is None else np.percentile(x, 10)
+                            df.loc[sgr_df.index, '20pth_' + col] = df.loc[sgr_df.index, col].apply(
+                                lambda x: pd.NA if x is None else np.percentile(x, 20)
                             )
-                            df.loc[sgr_df.index, '90pth_' + col] = df.loc[sgr_df.index, col].apply(
-                                lambda x: pd.NA if x is None else np.percentile(x, 90)
+                            df.loc[sgr_df.index, '80pth_' + col] = df.loc[sgr_df.index, col].apply(
+                                lambda x: pd.NA if x is None else np.percentile(x, 80)
                             )
 
                     # aggregate errors
@@ -407,7 +418,7 @@ class CalcMetricRanks(Step[DuckDBPyConnection]):
 
 @Step.register('plot_metrics')
 class PlotMetrics(Step):
-    VERSION = "014"
+    VERSION = "015"
 
     def run(self, db: DuckDBPyConnection):
         df = db.sql("SELECT * FROM aggr_stats").df()
@@ -417,9 +428,9 @@ class PlotMetrics(Step):
 
             # line plot for each independent metric, layers on x, metric on y, method as hue
             IND_AGGR = ['mean', 'trim_mean', 'median']
-            metrics = list(OTHER_METRICS)
-            metrics += [f'{t}_{e}' for e in ERR_COLS for t in IND_AGGR]
-            for metric in metrics:
+            metrics = [(m, m) for m in OTHER_METRICS]
+            metrics += [(f'{t}_{e}', e) for e in ERR_COLS for t in IND_AGGR]
+            for metric, e in metrics:
                 plt.figure()
                 filename = metric + "_" + base_name
                 plot = so.Plot(
@@ -429,7 +440,7 @@ class PlotMetrics(Step):
                     color=so.Nominal(order=sorted(METHOD_MAP.values()))
                 ).label(
                     x='Layer', y=metric.replace('_', ' ').capitalize(), color='Method'
-                )
+                ).limit(y=Y_LIMITS[e])
                 plot.save(
                     self.work_dir.parent / filename, format='pdf', dpi=300, bbox_inches='tight'
                 )
@@ -444,7 +455,7 @@ class PlotMetrics(Step):
                     color='PROBE_type'
                 ).add(so.Line(linewidth=2)).add(so.Band(edgewidth=1)).scale(
                     color=so.Nominal(order=sorted(METHOD_MAP.values()))
-                ).label(x='Layer', color='Method')
+                ).limit(y=Y_LIMITS[e]).label(x='Layer', color='Method')
                 plot.save(
                     self.work_dir.parent / f'median_pth_{e}_{base_name}',
                     format='pdf', dpi=300, bbox_inches='tight'
@@ -453,7 +464,7 @@ class PlotMetrics(Step):
 
 @Step.register('plot_e3_e4')
 class PlotE3E4(Step):
-    VERSION = "016"
+    VERSION = "017"
 
     def run(self, db: DuckDBPyConnection, aggr_type: str = "trim_mean"):
         df = db.sql("SELECT * FROM aggr_stats").df()
@@ -471,7 +482,7 @@ class PlotE3E4(Step):
                 x=aggr_type + ' E3', y=aggr_type + ' E4', color='Layer', marker='Method'
             ).scale(
                 marker=so.Nominal(order=sorted(METHOD_MAP.values()))
-            ).limit(x=(0, None), y=(0, None))
+            ).limit(x=Y_LIMITS['error_3'], y=Y_LIMITS['error_4'])
 
             plot.save(
                 self.work_dir.parent / ('E3_E4_scatter' + base_name),

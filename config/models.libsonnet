@@ -6,6 +6,13 @@
         batch_size: 16,
         revision: "main",
     },
+//    'gemma-7b': {
+//        key: "google/gemma-7b",
+//        type: 'decoder',
+//        layers: std.range(1, 28),
+//        batch_size: 12,
+//        revision: "main",
+//    },
     'llama2-13b': {
         key: "meta-llama/Llama-2-13b-hf",
         type: 'decoder',
