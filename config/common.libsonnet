@@ -31,10 +31,6 @@ local data_gen_steps(data_key, data_config, model_key, model_config, model_objec
             all_layers: true,
             model_type: model_config['type'],
 	    },
-//	    [prefix + 'hidden_state_ranks']: {
-//	        "type": "print_rank",
-//	        gen_out: {"ref": prefix+"outputs"},
-//	    },
     } + {
 	    [prefix + 'layer' + layer + '|split_outputs']: {
 	        "type": "create_splits",
@@ -47,12 +43,12 @@ local data_gen_steps(data_key, data_config, model_key, model_config, model_objec
 	        data: {"ref": prefix + 'layer' + layer + "|split_outputs"},
 	        var_normalize: false,
 	    } for layer in model_config['layers']
-	} + {
-	    [prefix + 'layer' + layer + '|var_normalized_hidden_states']: {
-	        "type": "normalize",
-	        data: {"ref": prefix + 'layer' + layer + "|split_outputs"},
-	        var_normalize: true,
-	    } for layer in model_config['layers']
+//	} + {
+//	    [prefix + 'layer' + layer + '|var_normalized_hidden_states']: {
+//	        "type": "normalize",
+//	        data: {"ref": prefix + 'layer' + layer + "|split_outputs"},
+//	        var_normalize: true,
+//	    } for layer in model_config['layers']
 	};
 
 
