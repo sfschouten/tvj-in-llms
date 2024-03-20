@@ -132,8 +132,33 @@ class ContrastDataset(Dataset):
         # construct contrast pairs by answering the prompt with the two different possible labels
         # (for example, label 0 might be mapped to "no" and label 1 might be mapped to "yes")
         neg_prompt, pos_prompt = self.prompt.apply(neg_example), self.prompt.apply(pos_example)
+        assert neg_prompt[0] == pos_prompt[0], print("Start of prompts were different for neg and pos.")
+        start = neg_prompt[0]
+
+        # find other occurrences of pos/neg answer tokens
+        def find_all(substr):
+            all_ranges = []
+            all_found = False
+            idx = 0
+            while not all_found:
+                idx = start.find(substr, idx, -1)
+                if idx > -1:
+                    all_ranges.append((idx, idx + len(substr) - 1))
+                    idx += len(substr)
+                else:
+                    all_found = True
+            return all_ranges
+
+        other_answer_ranges = find_all(neg_prompt[1]) + find_all(pos_prompt[1])
+
         # tokenize
         neg_ids, pos_ids = self.encode(neg_prompt), self.encode(pos_prompt)
+
+        # find location of answers
+        other_answer_token_idxs = torch.LongTensor(
+            [t for t, o2 in enumerate(neg_ids.encodings[0].offsets)
+             if any(o1[0] <= o2[1] and o2[0] <= o1[1] for o1 in other_answer_ranges)]
+        )
 
         # verify these are different (e.g. tokenization didn't cut off the difference between them)
         if self.use_decoder and self.model_type == "encoder_decoder":
@@ -143,15 +168,18 @@ class ContrastDataset(Dataset):
             assert (neg_ids["input_ids"] - pos_ids["input_ids"]).sum() != 0, print(
                 "The input_ids for the contrast pairs are the same!", neg_ids, pos_ids)
 
-        neg_o = (len(neg_prompt[0])+1, len(neg_prompt[0])+len(neg_prompt[1])+1)
-        pos_o = (len(pos_prompt[0])+1, len(pos_prompt[0])+len(pos_prompt[1])+1)
-        neg_answer_tokens = torch.LongTensor(
+        # 'The statement "This is a test sentence." is correct.'
+        #                                              0^^^^^1  (index 1 contains the last char)
+        neg_o = (len(neg_prompt[0]) + 1, len(neg_prompt[0]) + 1 + len(neg_prompt[1]))
+        pos_o = (len(pos_prompt[0]) + 1, len(pos_prompt[0]) + 1 + len(pos_prompt[1]))
+        neg_answer_token_idxs = torch.LongTensor(
             [t for t, o in enumerate(neg_ids.encodings[0].offsets) if neg_o[0] <= o[1] and o[0] <= neg_o[1]])
-        pos_answer_tokens = torch.LongTensor(
+        pos_answer_token_idxs = torch.LongTensor(
             [t for t, o in enumerate(pos_ids.encodings[0].offsets) if pos_o[0] <= o[1] and o[0] <= pos_o[1]])
 
         # return the tokenized inputs, the text prompts, and the true label
-        return neg_ids, pos_ids, neg_prompt, pos_prompt, true_answer, neg_answer_tokens, pos_answer_tokens
+        return (neg_ids, pos_ids, neg_prompt, pos_prompt,
+                true_answer, neg_answer_token_idxs, pos_answer_token_idxs, other_answer_token_idxs)
 
 
 @Step.register('load_data')

@@ -5,6 +5,7 @@
         layers: std.range(1, 32),
         batch_size: 16,
         revision: "main",
+        layer_template: 'model.layers.{}',
     },
 //    'gemma-7b': {
 //        key: "google/gemma-7b",

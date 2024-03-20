@@ -122,13 +122,23 @@ class BeliefProbe(Registrable, ABC):
         _, acc = self.eval(train_data)
         self.sign = -1 if acc < 0.5 else 1
 
+        #
+        hs, _, y = train_data
+        y = y.unsqueeze(0).unsqueeze(-1).expand(-1, -1, hs.shape[-1])
+        true_hs = torch.gather(hs, dim=0, index=y).squeeze()
+        false_hs = torch.gather(hs, dim=0, index=1-y).squeeze()
+        true_u = true_hs.mean(dim=0)
+        false_u = false_hs.mean(dim=0)
+        self.length = (true_u - false_u).norm()
+        print(f'true-false distance: {self.length}')
+
     def calibrate_logits(self, logits):
         return self.sign * logits * self.scale
 
 
 @Step.register('train_belief_probe')
 class TrainBeliefProbe(Step[BeliefProbe]):
-    VERSION = "021"
+    VERSION = "023"
 
     def run(
         self,  train_data: DatasetDict[GenOut], calibration_data: DatasetDict[GenOut], probe: BeliefProbe, **kwargs
