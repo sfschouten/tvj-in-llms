@@ -20,6 +20,7 @@ local data_gen_steps(data_key, data_config, model_key, model_config, model_objec
             dataset_config_name: data_config['config'],
             prompt_name: data_config['prompt'],
             model_type: model_config['type'],
+            add_period: true,
 	    },
 	    [prefix + "outputs"]: {
 	        "type": "generate_hidden_states",

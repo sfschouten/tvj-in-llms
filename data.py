@@ -159,9 +159,9 @@ class LoadData(Step[Dataset]):
     DETERMINISTIC = True
     CACHEABLE = False       # already cached by HuggingFace datasets
 
-    def run(self, dataset_name: str, split: str, tokenizer: Tokenizer, prompt_i: int = None, prompt_name: str = None,
-            num_examples: int = 1000, dataset_config_name: str = None, model_type: str = "encoder_decoder",
-            use_decoder: bool = False, device: str = "cuda", seed=0) -> Dataset:
+    def run(self, dataset_name: str, split: str, tokenizer: Tokenizer, add_period: bool = False, prompt_i: int = None,
+            prompt_name: str = None, num_examples: int = 1000, dataset_config_name: str = None,
+            model_type: str = "encoder_decoder", use_decoder: bool = False, device: str = "cuda", seed=0) -> Dataset:
         """
         Creates a dataloader for a given dataset (and its split), tokenizer, and prompt index
 
@@ -197,6 +197,8 @@ class LoadData(Step[Dataset]):
         for idx in random_idxs:
             question, answer = prompt.apply(raw_dataset[int(idx)])
             input_text = question + " " + answer
+            if add_period:
+                input_text += "."
             sample_length = len(tokenizer.encode(input_text, truncation=False))
             max_sample_length = max(max_sample_length, sample_length)
             if sample_length < tokenizer.model_max_length - 2:  # include small margin to be conservative
