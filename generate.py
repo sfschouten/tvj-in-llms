@@ -1,7 +1,9 @@
 """
 Code to generate the hidden states on which we'll train the various probing methods.
 """
+import random
 
+import numpy
 from tango import Step
 from tango.integrations.torch import Model, TorchFormat
 from tango.integrations.transformers import Tokenizer
@@ -125,50 +127,6 @@ def get_masked_lm_logits(model, batch_ids, answer_tokens, mask_token_id, model_t
     return logits.cpu()
 
 
-def get_all_hidden_states(model, dataloader, mask_token_id, layer=None, all_layers=True, token_idx=-1,
-                          all_tokens=False, model_type="encoder_decoder", use_decoder=False):
-    """
-    Given a model, a tokenizer, and a dataloader, returns the hidden states (corresponding to a given position index) in
-    all layers for all examples in the dataloader, along with the average log probs corresponding to the answer tokens
-
-    The dataloader should correspond to examples *with a candidate label already added* to each example.
-    E.g. this function should be used for "Q: Is 2+2=5? A: True" or "Q: Is 2+2=5? A: False", but NOT for "Q: Is 2+2=5? A: ".
-    """
-    all_pos_hs, all_neg_hs = [], []
-    all_pos_logits, all_neg_logits = [], []
-    all_gt_labels = []
-
-    model.eval()
-    for batch in tqdm(dataloader):
-        neg_ids, pos_ids, _, _, gt_label, neg_answer_tokens, pos_answer_tokens = batch
-
-        kwargs = dict(layer=layer, all_layers=all_layers, token_idx=token_idx, all_tokens=all_tokens,
-                      model_type=model_type, use_decoder=use_decoder)
-        neg_hs, neg_logits = get_individual_hidden_states(model, neg_ids, neg_answer_tokens, **kwargs)
-        pos_hs, pos_logits = get_individual_hidden_states(model, pos_ids, pos_answer_tokens, **kwargs)
-
-        if model_type == 'encoder' or (model_type == 'encoder_decoder' and not use_decoder):
-            pos_logits = get_masked_lm_logits(model, pos_ids, pos_answer_tokens, mask_token_id, model_type)
-            neg_logits = get_masked_lm_logits(model, neg_ids, neg_answer_tokens, mask_token_id, model_type)
-
-        if dataloader.batch_size == 1:
-            neg_hs, pos_hs = neg_hs.unsqueeze(0), pos_hs.unsqueeze(0)
-
-        all_neg_hs.append(neg_hs)
-        all_pos_hs.append(pos_hs)
-        all_pos_logits.append(pos_logits )
-        all_neg_logits.append(neg_logits )
-        all_gt_labels.append(gt_label)
-
-    all_neg_hs = torch.cat(all_neg_hs, dim=0)
-    all_pos_hs = torch.cat(all_pos_hs, dim=0)
-    all_neg_logits = torch.cat(all_neg_logits, dim=0)
-    all_pos_logits = torch.cat(all_pos_logits, dim=0)
-    all_gt_labels = torch.cat(all_gt_labels, dim=0)
-
-    return all_neg_hs, all_pos_hs, all_neg_logits, all_pos_logits, all_gt_labels
-
-
 HiddenStates = torch.Tensor
 Logits = torch.Tensor
 Labels = torch.Tensor
@@ -213,6 +171,38 @@ class Generate(Step[GenOut]):
 
         return self.unique_id_cache
 
+    @staticmethod
+    def seed_worker(worker_id):
+        worker_seed = torch.initial_seed() % 2 ** 32
+        numpy.random.seed(worker_seed)
+        random.seed(worker_seed)
+
+    @staticmethod
+    def create_dataloader(dataset, batch_size, pin_memory, num_workers, seed):
+        g = torch.Generator()
+        g.manual_seed(seed)
+
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False, pin_memory=pin_memory,
+                                num_workers=num_workers, generator=g, worker_init_fn=Generate.seed_worker)
+        print(next(iter(dataloader))[2][0][0])
+        return dataloader
+
+    def forward_batch(self, model, batch, dataloader, mask_token_id, **kwargs):
+        neg_ids, pos_ids, _, _, gt_label, neg_answer_tokens, pos_answer_tokens, _ = batch
+
+        neg_hs, neg_logits = get_individual_hidden_states(model, neg_ids, neg_answer_tokens, **kwargs)
+        pos_hs, pos_logits = get_individual_hidden_states(model, pos_ids, pos_answer_tokens, **kwargs)
+
+        model_type = kwargs['model_type']
+        if model_type == 'encoder' or (model_type == 'encoder_decoder' and not kwargs['use_decoder']):
+            pos_logits = get_masked_lm_logits(model, pos_ids, pos_answer_tokens, mask_token_id, model_type)
+            neg_logits = get_masked_lm_logits(model, neg_ids, neg_answer_tokens, mask_token_id, model_type)
+
+        if dataloader.batch_size == 1:
+            neg_hs, pos_hs = neg_hs.unsqueeze(0), pos_hs.unsqueeze(0)
+
+        return neg_hs, pos_hs, neg_logits, pos_logits
+
     def run(self, model: Model, tokenizer: Tokenizer, dataset: Dataset, batch_size: int,
             layer: int = None,                      # which layer's hidden states to extract (if not all layers)
             all_layers: bool = False,               # whether to use all layers or not
@@ -222,26 +212,38 @@ class Generate(Step[GenOut]):
             model_type: str = "encoder_decoder",
             use_decoder: bool = False,
             # dataloader options
-            pin_memory: bool = True, num_workers: int = 2
+            pin_memory: bool = True, num_workers: int = 2, dataloader_seed: int = 0,
             ) -> GenOut:
         # create and return the corresponding dataloader
-        dataloader = DataLoader(
-            dataset, batch_size=batch_size, shuffle=False, pin_memory=pin_memory, num_workers=num_workers
-        )
-        print(next(iter(dataloader))[2][0][0])
+        dataloader = self.create_dataloader(dataset, batch_size, pin_memory, num_workers, dataloader_seed)
 
         model = model.to('cuda')
+        mask_token_id = tokenizer.mask_token_id
 
-        # Get the hidden states and labels
         print("Generating hidden states")
-        neg_hs, pos_hs, neg_logits, pos_logits, y = get_all_hidden_states(
-            model, dataloader, tokenizer.mask_token_id,
-            layer=layer, all_layers=all_layers, token_idx=token_idx, all_tokens=all_tokens, model_type=model_type,
-            use_decoder=use_decoder
-        )
+        all_pos_hs, all_neg_hs = [], []
+        all_pos_logits, all_neg_logits = [], []
+        all_gt_labels = []
 
-        hs = torch.stack((neg_hs, pos_hs)).to(torch.float32)
-        ps = torch.stack((neg_logits, pos_logits)).to(torch.float32)
+        model.eval()
+        for batch in tqdm(dataloader):
+            kwargs = dict(layer=layer, all_layers=all_layers, token_idx=token_idx, all_tokens=all_tokens,
+                          model_type=model_type, use_decoder=use_decoder)
+            neg_hs, pos_hs, neg_logits, pos_logits = self.forward_batch(
+                model, batch, dataloader, mask_token_id, **kwargs
+            )
+            all_neg_hs.append(neg_hs)
+            all_pos_hs.append(pos_hs)
+            all_pos_logits.append(pos_logits)
+            all_neg_logits.append(neg_logits)
+            all_gt_labels.append(batch[4])
 
-        return hs, ps, y
+        all_neg_hs = torch.cat(all_neg_hs, dim=0)
+        all_pos_hs = torch.cat(all_pos_hs, dim=0)
+        all_neg_logits = torch.cat(all_neg_logits, dim=0)
+        all_pos_logits = torch.cat(all_pos_logits, dim=0)
+        all_gt_labels = torch.cat(all_gt_labels, dim=0)
 
+        hs = torch.stack((all_neg_hs, all_pos_hs)).to(torch.float32)
+        ps = torch.stack((all_neg_logits, all_pos_logits)).to(torch.float32)
+        return hs, ps, all_gt_labels

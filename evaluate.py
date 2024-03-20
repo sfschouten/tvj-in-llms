@@ -55,11 +55,9 @@ class Normalize(Step[DatasetDict[GenOut]]):
         If var_normalize, also divides by the standard deviation
         """
         def normalize(x):
-            x2 = x.clone()
-            x2[~torch.isfinite(x2)] = float('nan')
-            normalized_x = x - torch.nanmean(x2, axis=0, keepdims=True)
+            normalized_x = x - torch.nanmean(x, dim=0, keepdims=True)
             if var_normalize:
-                normalized_x /= normalized_x.std(axis=0, keepdims=True)
+                normalized_x /= normalized_x.std(dim=0, keepdims=True)
             return normalized_x
 
         result = {}
@@ -122,13 +120,23 @@ class BeliefProbe(Registrable, ABC):
         _, acc = self.eval(train_data)
         self.sign = -1 if acc < 0.5 else 1
 
+        #
+        hs, _, y = train_data
+        y = y.unsqueeze(0).unsqueeze(-1).expand(-1, -1, hs.shape[-1])
+        true_hs = torch.gather(hs, dim=0, index=y).squeeze()
+        false_hs = torch.gather(hs, dim=0, index=1-y).squeeze()
+        true_u = true_hs.mean(dim=0)
+        false_u = false_hs.mean(dim=0)
+        self.length = (true_u - false_u).norm()
+        print(f'true-false distance: {self.length}')
+
     def calibrate_logits(self, logits):
         return self.sign * logits * self.scale
 
 
 @Step.register('train_belief_probe')
 class TrainBeliefProbe(Step[BeliefProbe]):
-    VERSION = "021"
+    VERSION = "023"
 
     def run(
         self,  train_data: DatasetDict[GenOut], calibration_data: DatasetDict[GenOut], probe: BeliefProbe, **kwargs
@@ -412,8 +420,8 @@ class MassMeanProbe(BeliefProbe):
         hs, _, y = gen_out
 
         y = y.unsqueeze(0).unsqueeze(-1).expand(-1, -1, hs.shape[-1])
-        true_hs = torch.gather(hs, dim=1, index=y).squeeze()
-        false_hs = torch.gather(hs, dim=1, index=1-y).squeeze()
+        true_hs = torch.gather(hs, dim=0, index=y).squeeze()
+        false_hs = torch.gather(hs, dim=0, index=1-y).squeeze()
 
         # take mean of pos and neg and store the difference as the 'truth direction'
         true_u = true_hs.mean(dim=0)
