@@ -506,19 +506,3 @@ class PlotE3E4(Step):
                 format='pdf', dpi=300, bbox_inches='tight'
             )
 
-
-@Step.register('direction_similarity')
-class DirectionSimilarity(Step[str]):
-    FORMAT = TextFormat
-
-    def run(self, db: DuckDBPyConnection, **kwargs) -> str:
-        # calculate cosine similarity between pairs of directions
-
-        similarities = db.sql(
-            "SELECT r1.STEP_NAME, r2.STEP_NAME, list_cosine_similarity(r1.direction, r2.direction)\n"
-            "FROM results AS r1\n"
-            "CROSS JOIN results AS r2\n"
-        ).df()
-
-        csv_string = similarities.to_csv()
-        return csv_string
