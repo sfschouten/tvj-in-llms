@@ -55,11 +55,9 @@ class Normalize(Step[DatasetDict[GenOut]]):
         If var_normalize, also divides by the standard deviation
         """
         def normalize(x):
-            x2 = x.clone()
-            x2[~torch.isfinite(x2)] = float('nan')
-            normalized_x = x - torch.nanmean(x2, axis=0, keepdims=True)
+            normalized_x = x - torch.nanmean(x, dim=0, keepdims=True)
             if var_normalize:
-                normalized_x /= normalized_x.std(axis=0, keepdims=True)
+                normalized_x /= normalized_x.std(dim=0, keepdims=True)
             return normalized_x
 
         result = {}
