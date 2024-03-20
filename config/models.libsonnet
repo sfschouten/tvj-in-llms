@@ -1,4 +1,12 @@
 {
+//    'pythia-2.8b': {
+//        key: 'EleutherAI/pythia-2.8b',
+//        type: 'decoder',
+//        layers: std.range(1, 32),
+//        batch_size: 64,
+//        revision: 'main',
+//        layer_template: 'gpt_neox.layers.{}',
+//    },
     'llama2-7b': {
         key: "meta-llama/Llama-2-7b-hf",
         type: 'decoder',
