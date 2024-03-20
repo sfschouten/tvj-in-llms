@@ -63,24 +63,24 @@ local usv_method_train_steps(data_key, model_key, layer) =
     local cal_data = std.split(data_key, '-')[0] + '-no_prem';
     local calibration_prefix = create_method_prefix(cal_data, model_key, layer);
 
-    local ccs_trials = {
-        [prefix + 'trial|ccs_' + seed]: {
-            "type": "train_belief_probe",
-            train_data: {"ref": prefix+"normalized_hidden_states"},
-            calibration_data: {"ref": calibration_prefix+"normalized_hidden_states"},
-            probe: {
-                "type": "ccs_gd",
-                seed: seed,
-                n_epochs: 1000,
-                lr: 1e-3,
-                batch_size: -1,     # full batch
-                weight_decay: 0.01,
-                use_constraint: false,
-                informative_loss: 'min_sq'
-            }
-        }
-        for seed in CCS_SEEDS
-    };
+//    local ccs_trials = {
+//        [prefix + 'trial|ccs_' + seed]: {
+//            "type": "train_belief_probe",
+//            train_data: {"ref": prefix+"normalized_hidden_states"},
+//            calibration_data: {"ref": calibration_prefix+"normalized_hidden_states"},
+//            probe: {
+//                "type": "ccs_gd",
+//                seed: seed,
+//                n_epochs: 1000,
+//                lr: 1e-3,
+//                batch_size: -1,     # full batch
+//                weight_decay: 0.01,
+//                use_constraint: false,
+//                informative_loss: 'min_sq'
+//            }
+//        }
+//        for seed in CCS_SEEDS
+//    };
 
     {
         [prefix + 'train|' + 'lm_head_baseline_calibrate=' + calibrate]: {
@@ -100,17 +100,17 @@ local usv_method_train_steps(data_key, model_key, layer) =
             calibration_data: {"ref": calibration_prefix+"normalized_hidden_states"},
             probe: {"type": "ccr", seed: 0},
         }
-    } + ccs_trials + {
-        [prefix + 'train|ccs']: {
-            "type": "select_best",
-            train_data: {"ref": prefix+"normalized_hidden_states"},
-            calibration_data: {"ref": calibration_prefix+"normalized_hidden_states"},
-            probes: [
-                {"ref": prefix + 'trial|' + 'ccs_' + seed}
-                for seed in CCS_SEEDS
-            ],
-            probe_configs: std.objectKeysValues(ccs_trials)
-        }
+//    } + ccs_trials + {
+//        [prefix + 'train|ccs']: {
+//            "type": "select_best",
+//            train_data: {"ref": prefix+"normalized_hidden_states"},
+//            calibration_data: {"ref": calibration_prefix+"normalized_hidden_states"},
+//            probes: [
+//                {"ref": prefix + 'trial|' + 'ccs_' + seed}
+//                for seed in CCS_SEEDS
+//            ],
+//            probe_configs: std.objectKeysValues(ccs_trials)
+//        }
     } + {
 //        [prefix + 'train|' + 'ccs_linear-prio=' + prio]: {
 //            "type": "train_belief_probe",
@@ -155,7 +155,7 @@ local sv_method_train_steps(data_key, model_key, layer) =
                 iid: iid
             },
         }
-        for iid in [false, true]
+        for iid in [false] #, true]
     };
 
 
