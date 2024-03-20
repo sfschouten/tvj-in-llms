@@ -420,8 +420,8 @@ class MassMeanProbe(BeliefProbe):
         hs, _, y = gen_out
 
         y = y.unsqueeze(0).unsqueeze(-1).expand(-1, -1, hs.shape[-1])
-        true_hs = torch.gather(hs, dim=1, index=y).squeeze()
-        false_hs = torch.gather(hs, dim=1, index=1-y).squeeze()
+        true_hs = torch.gather(hs, dim=0, index=y).squeeze()
+        false_hs = torch.gather(hs, dim=0, index=1-y).squeeze()
 
         # take mean of pos and neg and store the difference as the 'truth direction'
         true_u = true_hs.mean(dim=0)
