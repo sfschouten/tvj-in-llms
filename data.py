@@ -159,6 +159,10 @@ class ContrastDataset(Dataset):
             [t for t, o2 in enumerate(neg_ids.encodings[0].offsets)
              if any(o1[0] <= o2[1] and o2[0] <= o1[1] for o1 in other_answer_ranges)]
         )
+        other_answer_token_idxs = torch.cat((
+            other_answer_token_idxs,
+            torch.LongTensor([-100] * (5 - len(other_answer_token_idxs)))
+        ))
 
         # verify these are different (e.g. tokenization didn't cut off the difference between them)
         if self.use_decoder and self.model_type == "encoder_decoder":
