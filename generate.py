@@ -109,6 +109,7 @@ def get_individual_hidden_states(model, batch_ids, answer_tokens, layer=None, al
 
     logits = get_answer_logits(batch_ids, output, answer_tokens, model_type, use_decoder=use_decoder)
 
+    assert torch.all(~torch.isnan(final_hs)), 'hidden state contains NaN values'
     return final_hs, logits.cpu()
 
 

@@ -48,6 +48,7 @@ class CreateSplits(Step[GenOut]):
 
 @Step.register('normalize')
 class Normalize(Step[DatasetDict[GenOut]]):
+    VERSION = "001"
 
     def run(self, data: DatasetDict[GenOut], var_normalize: bool) -> DatasetDict[GenOut]:
         """
@@ -55,7 +56,9 @@ class Normalize(Step[DatasetDict[GenOut]]):
         If var_normalize, also divides by the standard deviation
         """
         def normalize(x):
-            normalized_x = x - torch.nanmean(x, dim=0, keepdims=True)
+            x2 = x.clone()
+            x2[~torch.isfinite(x2)] = float('nan')
+            normalized_x = x - torch.nanmean(x2, dim=0, keepdims=True)
             if var_normalize:
                 normalized_x /= normalized_x.std(dim=0, keepdims=True)
             return normalized_x
@@ -114,7 +117,7 @@ class BeliefProbe(Registrable, ABC):
 
         # to scale logits
         std = torch.std(logits)
-        self.scale = scale * torch.logit(torch.tensor(0.75)) / std
+        self.scale = scale * torch.logit(torch.tensor(0.75), eps=1e-6) / std
 
         # to flip predictions in favor of probe
         _, acc = self.eval(train_data)
@@ -131,7 +134,10 @@ class BeliefProbe(Registrable, ABC):
         print(f'true-false distance: {self.length}')
 
     def calibrate_logits(self, logits):
-        return self.sign * logits * self.scale
+        new = self.sign * logits
+        if torch.isfinite(self.scale).item():
+            new *= self.scale
+        return new
 
 
 @Step.register('train_belief_probe')
@@ -142,6 +148,10 @@ class TrainBeliefProbe(Step[BeliefProbe]):
         self,  train_data: DatasetDict[GenOut], calibration_data: DatasetDict[GenOut], probe: BeliefProbe, **kwargs
     ) -> BeliefProbe:
         probe.train_loss = probe.train(train_data['train'])
+        direction = probe.get_direction()
+        if direction is not None:
+            assert torch.all(~torch.isnan(direction))
+
         probe.calc_calibration_params(train_data['train'], calibration_data['train'])
         probe.config = self.config['probe']
         probe.train_step_name = self.name
@@ -161,16 +171,17 @@ class SelectBest(Step[list[BeliefProbe]]):
 @Step.register('eval_belief_probe')
 class EvalBeliefProbe(Step[ProbeResults]):
     FORMAT = TorchFormat
-    VERSION = "009"
+    VERSION = "010"
 
     def run(self,  data: DatasetDict[GenOut], probe: BeliefProbe, **kwargs) -> ProbeResults:
         probs, acc = probe.eval(data['eval'])
 
         # calibrate predictions
-        logits = torch.logit(probs)
+        logits = torch.logit(probs, eps=1e-6)
         logits = probe.calibrate_logits(logits)
         new_probs = torch.sigmoid(logits)
 
+        assert torch.all(~torch.isnan(new_probs))
         return probe, data['eval'][2], new_probs, probe.get_direction()
 
 
