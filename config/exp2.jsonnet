@@ -6,26 +6,26 @@ local common = import 'common.libsonnet';
 local data = import 'data.libsonnet';
 local models = import 'models.libsonnet';
 
-local train_data_key = dataset + '-original_pos_prem';
+local pos_prem_data_key = dataset + '-original_pos_prem';
 local calibration_data_key = dataset + '-no_prem';
-local train_data_config = data[dataset][train_data_key];
+local train_data_config = data[dataset][pos_prem_data_key];
 local calibration_data_config = data[dataset][calibration_data_key];
 
 local model_config = models[model_key];
 
-local prefix = common.create_method_prefix_func(train_data_key, model_key, null);
+local pos_prem_prefix = common.create_method_prefix_func(pos_prem_data_key, model_key, null);
 
 
 local steps() =
     local train_steps = utils.join_objects([
-        common.usv_method_train_steps_func(train_data_key, model_key, layer)
+        common.usv_method_train_steps_func(pos_prem_data_key, model_key, layer)
         for layer in model_config['layers']
     ]) + utils.join_objects([
-        common.sv_method_train_steps_func(train_data_key, model_key, layer)
+        common.sv_method_train_steps_func(pos_prem_data_key, model_key, layer)
         for layer in model_config['layers']
     ]);
     local training_data = common.data_gen_steps_func(
-        train_data_key, train_data_config, model_key, model_config,
+        pos_prem_data_key, train_data_config, model_key, model_config,
         {"ref": model_key}, {"ref": model_key + "-tokenizer"}
     );
     local calibration_data = common.data_gen_steps_func(
@@ -34,13 +34,13 @@ local steps() =
     );
 
 //    local layers_list = [[5,6,7,8,9]];
-    local layers_list = [[10,11,12,13,14]];
+    local layers_list = [[11,12,13,14,15]];
     local intervened_outputs =  {
         ["INTERVENED_on"+std.toString(layers)+"_with[" + std.strReplace(train_step['key'], '|', ',') + "]"]: {
             type: "generate_with_intervention",
             model: {ref: model_key},
             tokenizer: {ref: model_key + "-tokenizer"},
-            dataset: {ref: prefix + 'data'},
+            dataset: {ref: pos_prem_prefix + 'data'},
             batch_size: model_config['batch_size'],
             all_layers: true,
             model_type: model_config['type'],
@@ -48,10 +48,11 @@ local steps() =
             module_template: model_config['layer_template'],
             layers: layers,
             intervene_on_period: true,
+            intervention_sign: -1,
         }
         for layers in layers_list
         for train_step in std.objectKeysValues(train_steps)
-        if std.member(train_step['key'], 'layer'+layers[4])   # use direction found in (first) intervention layer
+        if std.member(train_step['key'], 'layer'+layers[2])   # use direction found in (first) intervention layer
         if std.member(train_step['key'], 'lm_head_baseline') == false  # skip LM-Head baseline (no truth-direction)
     };
 
