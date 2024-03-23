@@ -169,8 +169,8 @@ local steps_model(model_key, model_config, dataset_config) =
             type: "transformers::AutoModelForCausalLM::from_pretrained::step",
             pretrained_model_name_or_path: model_config['key'],
             device_map: {"": "cuda:0"},
-            torch_dtype: "float16",
             revision: model_config['revision'],
+            trust_remote_code: true,
         },
         [model_key + "-tokenizer"]: {
             type: "transformers::AutoTokenizer::from_pretrained::step",
