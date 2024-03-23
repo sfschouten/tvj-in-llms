@@ -170,6 +170,7 @@ local steps_model(model_key, model_config, dataset_config) =
             pretrained_model_name_or_path: model_config['key'],
             device_map: {"": "cuda:0"},
             revision: model_config['revision'],
+            torch_dtype: if 'torch_dtype' in model_config then model_config['torch_dtype'] else 'auto',
             trust_remote_code: true,
         },
         [model_key + "-tokenizer"]: {

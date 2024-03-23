@@ -69,6 +69,8 @@ def auto_model_wrapper_factory(cls: type) -> tuple[Type[Model], Type[Step[Model]
     class AutoModelLoaderPretrained(Step):
         CACHEABLE = False
         MODEL_CLASS = AutoModelWrapper
+        SKIP_ID_ARGUMENTS = {'torch_dtype', 'trust_remote_code'}
+        SKIP_DEFAULT_ARGUMENTS = {'torch_dtype', 'trust_remote_code'}
 
         def run(self, **kwargs) -> Model:
             return self.MODEL_CLASS.from_pretrained(**kwargs)
@@ -91,8 +93,6 @@ for name, cls in modeling_auto.__dict__.items():
 @Step.register('transformers::AutoTokenizer::from_pretrained::step')
 class AutoTokenizerLoader(Step):
     CACHEABLE = False
-    SKIP_ID_ARGUMENTS = {'torch_dtype', 'trust_remote_code'}
-    SKIP_DEFAULT_ARGUMENTS = {'torch_dtype', 'trust_remote_code'}
 
     def run(self, **kwargs) -> Tokenizer:
         return AutoTokenizer.from_pretrained(**kwargs)

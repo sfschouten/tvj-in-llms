@@ -81,7 +81,7 @@ class ContrastDataset(Dataset):
         """
         combined_input = question + " " + answer
         input_ids = self.tokenizer(combined_input, truncation=True, padding="max_length", return_tensors="pt",
-                                   max_length=self.max_length)
+                                   max_length=self.max_length, return_token_type_ids=False)
         return input_ids
 
     def get_decoder_input_ids(self, question, answer):
@@ -91,7 +91,7 @@ class ContrastDataset(Dataset):
         """
         combined_input = question + " " + answer  # + self.tokenizer.eos_token
         input_ids = self.tokenizer(combined_input, truncation=True, padding="max_length", return_tensors="pt",
-                                   max_length=self.max_length)
+                                   max_length=self.max_length, return_token_type_ids=False)
         return input_ids
 
     def get_encoder_decoder_input_ids(self, question, answer):
@@ -101,7 +101,8 @@ class ContrastDataset(Dataset):
         """
 
         # TODO: don't use max_length here, we should calculate max_lengths separately for question and answer
-        kwargs = dict(truncation=True, padding="max_length", return_tensors="pt", max_length=self.max_length)
+        kwargs = dict(truncation=True, padding="max_length", return_tensors="pt", max_length=self.max_length,
+                      return_token_type_ids=False)
         if self.use_decoder:
             # feed the same question to the encoder but different answers to the decoder to construct contrast pairs
             input_ids = self.tokenizer(question, **kwargs)

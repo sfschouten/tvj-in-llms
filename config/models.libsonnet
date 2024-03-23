@@ -15,38 +15,39 @@
         revision: "main",
         layer_template: 'model.layers.{}',
     },
-    'gemma-7b': {
-        key: "google/gemma-7b",
-        type: 'decoder',
-        layers: std.range(1, 28),
-        batch_size: 12,
-        revision: "main",
-        layer_template: "model.layers.{}"
-    },
-    'gemma-7b-it': {
-        key: "google/gemma-7b-it",
-        type: 'decoder',
-        layers: std.range(1, 28),
-        batch_size: 12,
-        revision: "main",
-        layer_template: "model.layers.{}"
-    },
-//    'olmo-7b': {
-//        key: 'allenai/OLMo-7B',
+//    'gemma-7b': {
+//        key: "google/gemma-7b",
 //        type: 'decoder',
-//        layers: std.range(1,32),
-//        batch_size: 16,
-//        revision: 'main',
-//        layer_template: 'model.transformer.blocks.{}',
+//        layers: std.range(1, 28),
+//        batch_size: 12,
+//        revision: "main",
+//        layer_template: "model.layers.{}"
 //    },
-//    'olmo-7b-instruct': {
-//        key: 'allenai/OLMo-7B-Instruct',
+//    'gemma-7b-it': {
+//        key: "google/gemma-7b-it",
 //        type: 'decoder',
-//        layers: std.range(1,32),
-//        batch_size: 16,
-//        revision: 'main',
-//        layer_template: 'model.transformer.blocks.{}',
+//        layers: std.range(1, 28),
+//        batch_size: 12,
+//        revision: "main",
+//        layer_template: "model.layers.{}"
 //    },
+    'olmo-7b': {
+        key: 'allenai/OLMo-7B',
+        type: 'decoder',
+        layers: std.range(1,32),
+        batch_size: 16,
+        revision: 'main',
+        torch_dtype: 'bfloat16',
+        layer_template: 'model.transformer.blocks.{}',
+    },
+    'olmo-7b-instruct': {
+        key: 'allenai/OLMo-7B-Instruct',
+        type: 'decoder',
+        layers: std.range(1,32),
+        batch_size: 16,
+        revision: 'main',
+        layer_template: 'model.transformer.blocks.{}',
+    },
 //    'pythia-2.8b': {
 //        key: 'EleutherAI/pythia-2.8b',
 //        type: 'decoder',
