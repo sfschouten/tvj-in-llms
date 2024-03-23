@@ -26,7 +26,11 @@ class ContrastDataset(Dataset):
         self.raw_dataset = raw_dataset
         self.tokenizer = tokenizer
         if self.tokenizer.pad_token is None:
+            print(f'Changing tokenizer.pad_token {tokenizer.pad_token} to {tokenizer.eos_token}')
             self.tokenizer.pad_token = self.tokenizer.eos_token
+        if self.tokenizer.padding_side != 'right':
+            print(f'Changing tokenizer.padding_side "{tokenizer.padding_side}" to "right"')
+            self.tokenizer.padding_side = 'right'
         self.device = device
         self.max_length = None
 
