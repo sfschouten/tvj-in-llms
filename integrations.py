@@ -40,15 +40,18 @@ def auto_model_wrapper_factory(cls: type) -> tuple[Type[Model], Type[Step[Model]
     class AutoModelWrapper(cls, Model):  # type: ignore
         @classmethod
         def from_pretrained(
-                cls, pretrained_model_name_or_path: str, torch_dtype: str, config: Optional[Config] = None,
+                cls, pretrained_model_name_or_path: str, torch_dtype: str = 'auto', config: Optional[Config] = None,
                 quantization_config: Optional[QuantizationConfig] = None, **kwargs
         ) -> Model:
             torch.manual_seed(0)
             np.random.seed(0)
             random.seed(0)
 
+            if torch_dtype != 'auto':
+                torch_dtype = getattr(torch, torch_dtype)
+
             model = super().from_pretrained(
-                pretrained_model_name_or_path, torch_dtype=getattr(torch, torch_dtype), config=config,
+                pretrained_model_name_or_path, torch_dtype=torch_dtype, config=config,
                 quantization_config=quantization_config, **kwargs
             )
 
@@ -88,6 +91,8 @@ for name, cls in modeling_auto.__dict__.items():
 @Step.register('transformers::AutoTokenizer::from_pretrained::step')
 class AutoTokenizerLoader(Step):
     CACHEABLE = False
+    SKIP_ID_ARGUMENTS = {'torch_dtype', 'trust_remote_code'}
+    SKIP_DEFAULT_ARGUMENTS = {'torch_dtype', 'trust_remote_code'}
 
     def run(self, **kwargs) -> Tokenizer:
         return AutoTokenizer.from_pretrained(**kwargs)
