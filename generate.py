@@ -17,6 +17,7 @@ import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 
 from integrations import TupleFormat
+NAN_ERROR = 'Hidden states contain NaN value(s)!'
 
 
 def get_first_mask_loc(mask, shift=False):
@@ -109,7 +110,8 @@ def get_individual_hidden_states(model, batch_ids, answer_tokens, layer=None, al
 
     logits = get_answer_logits(batch_ids, output, answer_tokens, model_type, use_decoder=use_decoder)
 
-    assert torch.all(~torch.isnan(final_hs)), 'hidden state contains NaN values'
+    if torch.any(torch.isnan(final_hs)):
+        raise RuntimeError(NAN_ERROR)
     return final_hs, logits.cpu()
 
 
@@ -188,11 +190,28 @@ class Generate(Step[GenOut]):
         print(next(iter(dataloader))[2][0][0])
         return dataloader
 
+    @staticmethod
+    def retry_nan_errors(_fn, nr_retries=3):
+        last_error = None
+        retries = nr_retries
+        while retries > 0:
+            try:
+                return _fn()
+            except RuntimeError as e:
+                last_error = e
+                if NAN_ERROR in str(e):
+                    print(f'Found NaN, {retries} left...')
+                    retries -= 1
+                else:
+                    raise
+        raise last_error
+
     def forward_batch(self, model, batch, dataloader, mask_token_id, **kwargs):
         neg_ids, pos_ids, _, _, gt_label, neg_answer_tokens, pos_answer_tokens, _ = batch
-
-        neg_hs, neg_logits = get_individual_hidden_states(model, neg_ids, neg_answer_tokens, **kwargs)
-        pos_hs, pos_logits = get_individual_hidden_states(model, pos_ids, pos_answer_tokens, **kwargs)
+        neg_hs, neg_logits = self.retry_nan_errors(
+            lambda: get_individual_hidden_states(model, neg_ids, neg_answer_tokens, **kwargs))
+        pos_hs, pos_logits = self.retry_nan_errors(
+            lambda: get_individual_hidden_states(model, pos_ids, pos_answer_tokens, **kwargs))
 
         model_type = kwargs['model_type']
         if model_type == 'encoder' or (model_type == 'encoder_decoder' and not kwargs['use_decoder']):

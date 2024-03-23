@@ -36,8 +36,10 @@ class IntervenedGenerate(Generate):
             return output
 
         with TraceDict(model, layers=self.layer_names, edit_output=intervention, retain_output=False, retain_input=False):
-            neg_hs, neg_logits = get_individual_hidden_states(model, neg_ids, neg_answer_tokens, **kwargs)
-            pos_hs, pos_logits = get_individual_hidden_states(model, pos_ids, pos_answer_tokens, **kwargs)
+            neg_hs, neg_logits = self.retry_nan_errors(
+                lambda: get_individual_hidden_states(model, neg_ids, neg_answer_tokens, **kwargs))
+            pos_hs, pos_logits = self.retry_nan_errors(
+                lambda: get_individual_hidden_states(model, pos_ids, pos_answer_tokens, **kwargs))
 
             model_type = kwargs['model_type']
             if model_type == 'encoder' or (model_type == 'encoder_decoder' and not kwargs['use_decoder']):
