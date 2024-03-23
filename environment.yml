@@ -6,24 +6,26 @@ dependencies:
   - python>=3.7.5,<4
   - pip
   - seaborn
-  - pytorch::pytorch=2=*cuda*
+  - pytorch::pytorch>=2=*cuda*
   - pytorch::pytorch-cuda>=11.8,<12
   - pytorch::torchvision
   - pytorch::torchaudio
   - main::sentencepiece
   - senyan.dev::cudatoolkit-dev
-  - conda-forge::transformers>=4.38,<5
+  - conda-forge::transformers>=4.38.2,<5
   - conda-forge::scikit-learn
   - conda-forge::cvxopt
   - conda-forge::tokenizers
   - conda-forge::datasets>=2.13,<3
-  - conda-forge::accelerate=0.20.3
+  - conda-forge::accelerate>=0.20.3
   - conda-forge::python-duckdb
   - conda-forge::gsutil
   - pip:
     - -e ../promptsource/
+    - -e ../tango-repo[datasets,fairscale,gs,torch,transformers]
     - mdmm
     - optax<0.1.8
     - protobuf<4
-    - auto-gptq[triton]
-    - ai2-tango[all]==1.3.2
+#    - auto-gptq[triton]
+#    - ai2-tango[all]==1.3.2        # torch<2.1
+#    - ai2-olmo                     # torch>=2,<2.2
