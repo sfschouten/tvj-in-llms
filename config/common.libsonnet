@@ -43,12 +43,6 @@ local data_gen_steps(data_key, data_config, model_key, model_config, model_objec
 	        data: {"ref": prefix + 'layer' + layer + "|split_outputs"},
 	        var_normalize: false,
 	    } for layer in model_config['layers']
-//	} + {
-//	    [prefix + 'layer' + layer + '|var_normalized_hidden_states']: {
-//	        "type": "normalize",
-//	        data: {"ref": prefix + 'layer' + layer + "|split_outputs"},
-//	        var_normalize: true,
-//	    } for layer in model_config['layers']
 	};
 
 
@@ -82,18 +76,17 @@ local usv_method_train_steps(data_key, model_key, layer) =
 //        for seed in CCS_SEEDS
 //    };
 
+
     {
-        [prefix + 'train|' + 'lm_head_baseline_calibrate=' + calibrate]: {
+        [prefix + 'train|' + 'lm_head_baseline']: {
             "type": "train_belief_probe",
-            train_data: {"ref": prefix+"split_outputs"},
+            train_data: {"ref": prefix+"normalized_hidden_states"},
             calibration_data: {"ref": calibration_prefix+"normalized_hidden_states"},
             probe: {
                 "type": "lm_head_baseline",
-                calibrate: calibrate
+                calibrate: true,
             },
-        }
-        for calibrate in [true] #, false]
-    } + {
+        },
         [prefix + 'train|' + 'ccr']: {
             "type": "train_belief_probe",
             train_data: {"ref": prefix+"normalized_hidden_states"},
@@ -111,16 +104,6 @@ local usv_method_train_steps(data_key, model_key, layer) =
 //            ],
 //            probe_configs: std.objectKeysValues(ccs_trials)
 //        }
-    } + {
-//        [prefix + 'train|' + 'ccs_linear-prio=' + prio]: {
-//            "type": "train_belief_probe",
-//            data: {"ref": prefix+"normalized_hidden_states"},
-//            probe: {
-//                "type": "ccs_linear",
-//                priority: prio
-//            },
-//        }
-//        for prio in [6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10, 10.5, 11, 11.5, 12]
 //    } + {
 //        [prefix + 'train|' + 'unsupervised-massmean']: {
 //            "type": "train_belief_probe",
@@ -179,31 +162,56 @@ local steps_model(model_key, model_config, dataset_config) =
         }
     };
 
-    local join_objects(objs) = std.foldl(function(acc, obj) acc + obj, objs, {});
-
-    local original_pos_prem = dataset_name + '-original_pos_prem';
-
     # load data and obtain hidden states
-    local data_steps = join_objects([
+    local data_steps = utils.join_objects([
         data_gen_steps(data['key'], data['value'], model_key, model_config,
                         {"ref": model_key}, {"ref": model_key + "-tokenizer"})
         for data in std.objectKeysValues(dataset_config)
     ]);
 
+    # combine training data
+    local combined_prefix = create_method_prefix(dataset_name + '-combined', model_key, null);
+    local variant_step_name(variant_key, layer) =
+        create_method_prefix(dataset_name + '-' + variant_key, model_key, layer) + 'normalized_hidden_states';
+    local combined_train_data = {
+        [combined_prefix + 'layer' + layer + '|normalized_hidden_states']: {
+            type: 'combine_train_data',
+            data: [
+                [250, true, {ref: variant_step_name('original_pos_prem', layer)}],
+                [250, false, {ref: variant_step_name('original_neg_prem', layer)}],
+                [75, true, {ref: variant_step_name('shuffle_pos_prem', layer)}],
+                [75, true, {ref: variant_step_name('shuffle_neg_prem', layer)}],
+                [75, true, {ref: variant_step_name('random_pos_prem', layer)}],
+                [75, true, {ref: variant_step_name('random_neg_prem', layer)}],
+                [200, true, {ref: variant_step_name('no_prem', layer)}],
+            ]
+        }
+        for layer in model_config['layers']
+    };
+
     # train probing methods
-    local usv_train_steps_singles = join_objects([
+    local usv_train_steps_singles = utils.join_objects([
         usv_method_train_steps(data_key, model_key, layer)
         for layer in model_config['layers']
-        for data_key in std.objectFields(dataset_config) if data_key != original_pos_prem
+        for data_key in std.objectFields(dataset_config)
+        if !std.member([dataset_name + '-original_pos_prem', dataset_name + '-no_prem'], data_key)
     ]);
-    local usv_train_steps_pos_prem = join_objects([
-        usv_method_train_steps(original_pos_prem, model_key, layer)
+    local usv_train_steps_to_eval_on_all = utils.join_objects([
+        usv_method_train_steps(dataset_name + '-combined', model_key, layer)
+        for layer in model_config['layers']
+    ]) + utils.join_objects([
+        usv_method_train_steps(dataset_name + '-original_pos_prem', model_key, layer)
+        for layer in model_config['layers']
+    ]) + utils.join_objects([
+        usv_method_train_steps(dataset_name + '-no_prem', model_key, layer)
         for layer in model_config['layers']
     ]);
-    //local usv_train_steps_combined = usv_method_train_steps(...); TODO
 
-    local sv_train_steps = join_objects([
-        sv_method_train_steps(original_pos_prem, model_key, layer)
+    local sv_train_steps_to_eval_on_all = utils.join_objects([
+        sv_method_train_steps(dataset_name + '-original_pos_prem', model_key, layer)
+        for layer in model_config['layers']
+    ]) + utils.join_objects([
+        sv_method_train_steps(dataset_name + '-no_prem', model_key, layer)
         for layer in model_config['layers']
     ]);
 
@@ -217,8 +225,8 @@ local steps_model(model_key, model_config, dataset_config) =
         for probe_obj in std.objectKeysValues(usv_train_steps_singles)
         if std.length(std.findSubstr('train', probe_obj['key'])) > 0    # skip individual trials
     };
-    # evaluate unsupervised methods trained on pos_prem on all other data variants
-    local usv_eval_pos_prem_steps = {
+    # evaluate unsupervised methods trained on pos_prem/combined/no_prem on all data variants
+    local usv_eval_steps_on_all = {
         [std.strReplace(probe_obj['key'], 'train', 'eval@' + data_key)]: {
             "type": "eval_belief_probe",
             data: {
@@ -227,14 +235,11 @@ local steps_model(model_key, model_config, dataset_config) =
             },
             probe: {"ref": probe_obj['key']},
         }
-        for probe_obj in std.objectKeysValues(usv_train_steps_pos_prem)
+        for probe_obj in std.objectKeysValues(usv_train_steps_to_eval_on_all)
         for data_key in std.objectFields(dataset_config)
         if std.length(std.findSubstr('train', probe_obj['key'])) > 0    # skip individual trials
     };
-    # evaluate unsupervised methods trained on combined data on all data variants
-    # TODO
-
-    # evaluate supervised methods trained on pos_prem on all data variants
+    # evaluate supervised methods trained on pos_prem/no_prem on all data variants
     local sv_eval_steps = {
         [std.strReplace(probe_obj['key'], 'train', 'eval@' + data_key)]: {
             "type": "eval_belief_probe",
@@ -244,16 +249,16 @@ local steps_model(model_key, model_config, dataset_config) =
             },
             probe: {"ref": probe_obj['key']},
         }
-        for probe_obj in std.objectKeysValues(sv_train_steps)
+        for probe_obj in std.objectKeysValues(sv_train_steps_to_eval_on_all)
         for data_key in std.objectFields(dataset_config)
         if std.length(std.findSubstr('train', probe_obj['key'])) > 0    # skip individual trials
     };
 
     {
         "model_step": model_step,
-        "data_steps": data_steps,
-        "train_steps": usv_train_steps_singles + usv_train_steps_pos_prem + sv_train_steps,
-        "eval_steps": usv_eval_steps_singles + usv_eval_pos_prem_steps + sv_eval_steps,
+        "data_steps": data_steps + combined_train_data,
+        "train_steps": usv_train_steps_singles + usv_train_steps_to_eval_on_all + sv_train_steps_to_eval_on_all,
+        "eval_steps": usv_eval_steps_singles + usv_eval_steps_on_all + sv_eval_steps,
     };
 
 

@@ -72,6 +72,27 @@ class Normalize(Step[DatasetDict[GenOut]]):
         return DatasetDict(splits=result)
 
 
+@Step.register('combine_train_data')
+class CombineTrainData(Step[DatasetDict[GenOut]]):
+
+    def run(self, data: list[tuple[int, bool, DatasetDict[GenOut]]]) -> DatasetDict[GenOut]:
+        new_hs = []
+        new_ps = []
+        new_y = []
+        for nr_to_sample, supervised, data_part in data:
+            hs, ps, y = data_part['train']
+            sample_idx = torch.randperm(hs.shape[1])
+            sample_hs = hs[:, sample_idx[:nr_to_sample]]
+            sample_ps = ps[:, sample_idx[:nr_to_sample]]
+            sample_y = y[sample_idx[:nr_to_sample]] if supervised \
+                else torch.full((nr_to_sample,), torch.nan, dtype=torch.bool)
+            new_hs.append(sample_hs)
+            new_ps.append(sample_ps)
+            new_y.append(sample_y)
+        new_train_split = torch.cat(new_hs, dim=1), torch.cat(new_ps, dim=1), torch.cat(new_y, dim=0)
+        return DatasetDict(splits={'train': new_train_split})
+
+
 @Step.register('print_rank')
 class PrintRank(Step[None]):
 
@@ -125,13 +146,14 @@ class BeliefProbe(Registrable, ABC):
 
         #
         hs, _, y = train_data
-        y = y.unsqueeze(0).unsqueeze(-1).expand(-1, -1, hs.shape[-1])
-        true_hs = torch.gather(hs, dim=0, index=y).squeeze()
-        false_hs = torch.gather(hs, dim=0, index=1-y).squeeze()
-        true_u = true_hs.mean(dim=0)
-        false_u = false_hs.mean(dim=0)
-        self.length = (true_u - false_u).norm()
-        print(f'true-false distance: {self.length}')
+        if torch.all(torch.isfinite(y)):        # skip for combined training data
+            y = y.unsqueeze(0).unsqueeze(-1).expand(-1, -1, hs.shape[-1])
+            true_hs = torch.gather(hs, dim=0, index=y).squeeze()
+            false_hs = torch.gather(hs, dim=0, index=1-y).squeeze()
+            true_u = true_hs.mean(dim=0)
+            false_u = false_hs.mean(dim=0)
+            self.length = (true_u - false_u).norm()
+            print(f'true-false distance: {self.length}')
 
     def calibrate_logits(self, logits):
         new = self.sign * logits

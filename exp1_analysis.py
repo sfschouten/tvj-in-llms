@@ -120,7 +120,7 @@ class DuckDBBuilder(Step[DuckDBPyConnection]):
 def create_figure_name(df, by_layer=True, extension='pdf'):
     model_name = df['train_AutoTokenizerLoader_pretrained_model_name_or_path'].iat[0]
     layer = df['train_CreateSplits_layer_index'].iat[0]
-    group = f"{df['same_variant_grp'].iat[0]}_{df['pos_origin_variant_grp'].iat[0]}"
+    group = f"train@{df['subgroup'].iat[0]}"
     file_name = f"plot_{group}_{model_name.split('/')[-1]}"
     if by_layer:
         file_name += f"_{layer}"
@@ -128,12 +128,12 @@ def create_figure_name(df, by_layer=True, extension='pdf'):
     return file_name, model_name, layer
 
 
-AGGR_TYPES = ['mean', 'median', 'trim_mean', '10pth', '90pth']
+AGGR_TYPES = ['mean', 'median', 'trim_mean', '20pth', '80pth']
 # ERR_COLS_1 are sensitive to outliers, require aggregation types other than the mean
 ERR_COLS_1 = ['error_1', 'error_2', 'error_3', 'error_4', 'error_3+4']
 ERR_COLS_2 = ['error_sv']
 ERR_COLS = ERR_COLS_1 + ERR_COLS_2
-OTHER_METRICS = ['accuracy', 'premise_sensitivity', 'rel_error_sv']
+OTHER_METRICS = ['accuracy@no_prem', 'accuracy@pos_prem', 'premise_sensitivity', 'rel_error_sv']
 METHOD_MAP = {
     'lr_sklearn': 'LR',
     'lm_head_baseline': 'LM-head',
@@ -142,21 +142,21 @@ METHOD_MAP = {
     'ccr': 'CCR',
 }
 Y_LIMITS = {
-    'error_1': (0, 2),
-    'error_2': (0, 2),
-    'error_3': (0, 2),
-    'error_4': (0, 2),
-    'error_3+4': (1, 3),
-    'error_sv': (0, 0.6),
-    'accuracy': (0, 1),
-    'premise_sensitivity': (0, 0.6),
+    'error_1': (0, 2), 'error_2': (0, 2), 'error_3': (0, 2), 'error_4': (0, 2), 'error_3+4': (1, 3),
+    'error_sv': (0, 0.6), 'accuracy@pos_prem': (0, 1), 'accuracy@no_prem': (0, 1), 'premise_sensitivity': (0, 0.6),
     'rel_error_sv': (0, 1),
 }
+LEGEND_LOC = {
+    'error_1': (.86, .6), 'error_2': (.86, .6), 'error_3': (.86, .6), 'error_4': (.86, .6),
+    'error_3+4': (.86, .6), 'error_sv': (.86, .6), 'accuracy@pos_prem': (.86, .07), 'accuracy@no_prem': (.86, .07),
+    'premise_sensitivity': (.86, .07), 'rel_error_sv': (.86, .07),
+}
+GROUPS = ['no_prem_grp', 'pos_prem_grp', 'combined_grp', 'same_variant_grp']
 
 
 @Step.register('prepare_dataframe')
 class PrepareDataframe(Step):
-    VERSION = "005"
+    VERSION = "008"
 
     def run(self, db: DuckDBPyConnection, **kwargs) -> pd.DataFrame:
         df: DataFrame = db.sql("SELECT * FROM results").df()
@@ -177,13 +177,13 @@ class PrepareDataframe(Step):
         df['premise_origin'] = df['EVAL_STEP_NAME_@.0'].str.extract(r'\w-([a-z]*)_.*')
         df['PROBE_type'] = df['PROBE_type'].replace(METHOD_MAP)
 
-        # create column to mark which rows were trained and evaluated on the same type of data
-        df['same_variant'] = (df['eval_prompt'] == df['train_prompt']) & (df['eval_config'] == df['train_config'])
-
         # create groups (the positive-premise runs go in both groups)
-        pos_origin_idx = df['EVAL_STEP_NAME_@.0'].str.endswith('-original_pos_prem')
-        df['same_variant_grp'] = df['same_variant'] | pos_origin_idx
-        df['pos_origin_variant_grp'] = ~df['same_variant'] | pos_origin_idx
+        for grp in GROUPS:
+            df[grp] = False
+        df['combined_grp'] |= df['TRAIN_STEP_NAME.0'].str.endswith('-combined')
+        df['pos_prem_grp'] |= df['TRAIN_STEP_NAME.0'].str.endswith('-original_pos_prem')
+        df['no_prem_grp'] |= df['TRAIN_STEP_NAME.0'].str.endswith('-no_prem')
+        df['same_variant_grp'] |= df['TRAIN_STEP_NAME.0'] == df['EVAL_STEP_NAME_@.0']
 
         # add columns for error types
         aggr_err_cols = [f'{t}_{err}' for err in ERR_COLS for t in AGGR_TYPES]
@@ -194,7 +194,7 @@ class PrepareDataframe(Step):
 @Step.register('calc_error_scores')
 class CalculateErrorScores(Step[DuckDBPyConnection]):
     FORMAT = DuckDBFormat
-    VERSION = "016"
+    VERSION = "018"
 
     def run(self, df: pd.DataFrame, **kwargs) -> DuckDBPyConnection:
         subgroup_aggr_stats = {}
@@ -206,12 +206,11 @@ class CalculateErrorScores(Step[DuckDBPyConnection]):
 
             # each level-0 group also have the same probe-type
             for l0_name, l0_df in l1_df.groupby(by='data_group_l0_id'):
-                # select the row corresponding to the run that was evaluated on the original, positive premises
-                original_pos = l0_df[l0_df['EVAL_STEP_NAME_@.0'].str.endswith('-original_pos_prem')]
 
                 def process_subgroup(sgr_df, sg_name):
                     a, o = sgr_df['premise_asserted'], sgr_df['premise_origin']
                     h_nly_i = sgr_df[sgr_df['premise_origin'] == 'no'].index
+                    original_pos = sgr_df[sgr_df['EVAL_STEP_NAME_@.0'].str.endswith('-original_pos_prem')]
 
                     # predictions
                     hyp_only_pred_vals = sgr_df.loc[h_nly_i].prediction.values[0]
@@ -283,7 +282,8 @@ class CalculateErrorScores(Step[DuckDBPyConnection]):
                     # === METRICS ===
                     # accuracy
                     metrics = {
-                        'accuracy': ((original_pos.prediction.values[0] > 0.5) == labels).mean(),
+                        'accuracy@pos_prem': ((original_pos.prediction.values[0] > 0.5) == labels).mean(),
+                        'accuracy@no_prem': ((hyp_only_pred_vals > 0.5) == labels).mean(),
                         'premise_sensitivity': np.mean(abs(pe)),
                         'mean_premise_effect': np.mean(pe),
                         'error_sv_0': np.mean(sv_score_0),
@@ -292,18 +292,30 @@ class CalculateErrorScores(Step[DuckDBPyConnection]):
                     metrics['rel_error_sv'] = np.mean(sv_score_1 + sv_score_0) / metrics['premise_sensitivity']
 
                     param_values = sgr_df.loc[
-                        sgr_df.index[0], sgr_df.columns[sgr_df.applymap(str).nunique() == 1]
+                        sgr_df.index[0], sgr_df.columns[sgr_df.map(str).nunique() == 1]
                     ].to_dict()  # add columns with single value for this subgroup
+                    param_values |= {'subgroup': sg_name}
                     subgroup_aggr_stats[f'{l0_name}_{sg_name}'] = param_values | aggregates | mean_preds | metrics
 
                 # subgroup with training and evaluation on same data (only exists for unsupervised methods)
-                same_data_df = l0_df.loc[l0_df['same_variant']]
-                if len(same_data_df.index) > 1:
+                same_data_df = l0_df.loc[l0_df['same_variant_grp']]
+                if len(same_data_df.index) > 2:
                     process_subgroup(same_data_df, 'same')
 
+                # subgroup with training on combination of variants (only exists for unsupervised methods)
+                combined_data_df = l0_df.loc[l0_df['combined_grp']]
+                if len(combined_data_df.index) > 0:
+                    process_subgroup(combined_data_df, 'combined')
+
+                # subgroup with training always done on data without premises
+                no_prem_data_df = l0_df.loc[l0_df['no_prem_grp']]
+                if len(no_prem_data_df.index) > 0:
+                    process_subgroup(no_prem_data_df, 'no-prem')
+
                 # subgroup with training always done on original-positive data
-                other_data_df = l0_df.loc[~l0_df['same_variant']]
-                process_subgroup(other_data_df, 'origin_pos')
+                pos_prem_data_df = l0_df.loc[l0_df['pos_prem_grp']]
+                if len(pos_prem_data_df.index) > 0:
+                    process_subgroup(pos_prem_data_df, 'pos-prem')
 
         aggr_stats_df = pd.DataFrame.from_dict(subgroup_aggr_stats).T
         duckdb.sql("CREATE TABLE aggr_stats AS SELECT * FROM aggr_stats_df;")
@@ -317,7 +329,7 @@ class StripPlotPredictions(Step):
 
         for l1_name, l1_df in df.groupby(by='data_group_l1_id'):
 
-            for group in ['same_variant_grp', 'pos_origin_variant_grp']:
+            for group in GROUPS:
                 plot_df = l1_df[l1_df[group]][
                     ['label', 'prediction', 'premise_origin', 'premise_asserted', 'TRAIN_STEP_NAME.4']
                 ]
@@ -379,6 +391,7 @@ class StripPlotPredictions(Step):
 @Step.register('calc_metric_ranks')
 class CalcMetricRanks(Step[DuckDBPyConnection]):
     FORMAT = DuckDBFormat
+    VERSION = "001"
 
     def run(self, db: DuckDBPyConnection):
         errors = [f'error_{i}' for i in range(1, 5)] + ['error_sv']
@@ -391,8 +404,8 @@ class CalcMetricRanks(Step[DuckDBPyConnection]):
         for score_name, rank_name in cols:
             db.sql(f'''
                 CREATE TEMP TABLE tmp_{rank_name} AS
-                    SELECT data_group_l0_id, same_variant, "{score_name}",
-                        row_number() OVER (PARTITION BY data_group_l2_id, same_variant 
+                    SELECT data_group_l0_id, subgroup, "{score_name}",
+                        row_number() OVER (PARTITION BY data_group_l2_id, subgroup 
                                            ORDER BY "{score_name}" ASC) AS rank
                     FROM aggr_stats;
             
@@ -400,7 +413,7 @@ class CalcMetricRanks(Step[DuckDBPyConnection]):
                 SET "{rank_name}" = r.rank 
                 FROM tmp_{rank_name} AS r
                 WHERE r.data_group_l0_id = l.data_group_l0_id
-                AND r.same_variant = l.same_variant;
+                AND r.subgroup = l.subgroup;
                 
                 DROP TABLE tmp_{rank_name};
             ''')
@@ -418,12 +431,12 @@ class CalcMetricRanks(Step[DuckDBPyConnection]):
 
 @Step.register('plot_metrics')
 class PlotMetrics(Step):
-    VERSION = "015"
+    VERSION = "029"
 
     def run(self, db: DuckDBPyConnection):
         df = db.sql("SELECT * FROM aggr_stats").df()
 
-        for grp_name, grp_df in df.groupby(by=['data_group_l2_id', 'same_variant_grp']):
+        for grp_name, grp_df in df.groupby(by=['data_group_l2_id', 'subgroup']):
             base_name, _, _ = create_figure_name(grp_df, by_layer=False)
 
             # line plot for each independent metric, layers on x, metric on y, method as hue
@@ -436,40 +449,47 @@ class PlotMetrics(Step):
                 plot = so.Plot(
                     grp_df,
                     x='train_CreateSplits_layer_index', y=metric, color='PROBE_type'
-                ).add(so.Line()).scale(
-                    color=so.Nominal(order=sorted(METHOD_MAP.values()))
-                ).label(
-                    x='Layer', y=metric.replace('_', ' ').capitalize(), color='Method'
-                ).limit(y=Y_LIMITS[e])
-                plot.save(
-                    self.work_dir.parent / filename, format='pdf', dpi=300, bbox_inches='tight'
-                )
+                ).layout(size=(7, 4)) \
+                 .add(so.Line(marker='.')) \
+                 .scale(color=so.Nominal(order=sorted(METHOD_MAP.values()))) \
+                 .label(x='Layer', y=metric.replace('_', ' ').capitalize(), color='Method') \
+                 .limit(y=Y_LIMITS[e]) \
+                 .theme({'font.size': 18, 'legend.loc': 'best'}) \
+                 .plot(pyplot=True)
+                plot._figure.legends[0].set_bbox_to_anchor(plot._figure.axes[0].get_position())
+                plot._figure.legends[0].set_loc(LEGEND_LOC[e])
+                plot.save(self.work_dir.parent / filename, format='pdf', dpi=300, bbox_inches='tight')
 
-            # add also 10pth - median - 90pth
+            # add also 20pth - median - 80pth
             for e in ERR_COLS:
                 plt.figure()
                 plot = so.Plot(
                     grp_df,
                     x="train_CreateSplits_layer_index",
-                    y=f'median_{e}', ymin=f'10pth_{e}', ymax=f'90pth_{e}',
-                    color='PROBE_type'
-                ).add(so.Line(linewidth=2)).add(so.Band(edgewidth=1)).scale(
-                    color=so.Nominal(order=sorted(METHOD_MAP.values()))
-                ).limit(y=Y_LIMITS[e]).label(x='Layer', color='Method')
+                    y=f'median_{e}', ymin=f'20pth_{e}', ymax=f'80pth_{e}', color='PROBE_type',
+                ).layout(size=(7, 4)) \
+                 .add(so.Line(linewidth=2, marker='.')) \
+                 .add(so.Band(edgewidth=1)) \
+                 .scale(color=so.Nominal(order=sorted(METHOD_MAP.values()))) \
+                 .limit(y=Y_LIMITS[e]) \
+                 .label(x='Layer', color='Method') \
+                 .theme({'font.size': 18}) \
+                 .plot(pyplot=True)
+                plot._figure.legends[0].set_bbox_to_anchor(plot._figure.axes[0].get_position())
+                plot._figure.legends[0].set_loc(LEGEND_LOC[e])
                 plot.save(
-                    self.work_dir.parent / f'median_pth_{e}_{base_name}',
-                    format='pdf', dpi=300, bbox_inches='tight'
+                    self.work_dir.parent / f'median_pth_{e}_{base_name}', format='pdf', dpi=300, bbox_inches='tight'
                 )
 
 
 @Step.register('plot_e3_e4')
 class PlotE3E4(Step):
-    VERSION = "017"
+    VERSION = "032"
 
     def run(self, db: DuckDBPyConnection, aggr_type: str = "trim_mean"):
         df = db.sql("SELECT * FROM aggr_stats").df()
 
-        for grp_name, grp_df in df.groupby(by=['data_group_l2_id', 'same_variant_grp']):
+        for grp_name, grp_df in df.groupby(by=['data_group_l2_id', 'subgroup']):
             base_name, _, _ = create_figure_name(grp_df, by_layer=False)
 
             # scatter plot with E3 and E4 on x and y, method as mark, and layer as color
@@ -477,16 +497,18 @@ class PlotE3E4(Step):
             plot = so.Plot(
                 grp_df,
                 x=f'{aggr_type}_error_3', y=f'{aggr_type}_error_4', marker='PROBE_type',
-                color='train_CreateSplits_layer_index'
-            ).add(so.Dots()).layout(size=(7, 7)).label(
-                x=aggr_type + ' E3', y=aggr_type + ' E4', color='Layer', marker='Method'
-            ).scale(
-                marker=so.Nominal(order=sorted(METHOD_MAP.values()))
-            ).limit(x=Y_LIMITS['error_3'], y=Y_LIMITS['error_4'])
-
+                color='train_CreateSplits_layer_index',
+            ).add(so.Dots()) \
+             .layout(size=(7, 4)) \
+             .label(x=aggr_type + ' E3', y=aggr_type + ' E4', color='Layer', marker='Method') \
+             .scale(marker=so.Nominal(order=sorted(METHOD_MAP.values()))) \
+             .limit(x=Y_LIMITS['error_3'], y=Y_LIMITS['error_4']) \
+             .theme({'font.size': 18}) \
+             .plot(pyplot=True)
+            plot._figure.legends[0].set_bbox_to_anchor(plot._figure.axes[0].get_position())
+            plot._figure.legends[0].set_loc((0.82, 0.07))
             plot.save(
-                self.work_dir.parent / ('E3_E4_scatter' + base_name),
-                format='pdf', dpi=300, bbox_inches='tight'
+                self.work_dir.parent / ('E3_E4_scatter' + base_name), format='pdf', dpi=300, bbox_inches='tight'
             )
 
             # line plot showing log ratio of E3 to E4
@@ -494,15 +516,16 @@ class PlotE3E4(Step):
             grp_df['log_ratio'] = np.log(grp_df[f'{aggr_type}_error_3'] / grp_df[f'{aggr_type}_error_4'])
             plot = so.Plot(
                 grp_df,
-                x='train_CreateSplits_layer_index', y='log_ratio', color='PROBE_type'
-            ).add(so.Line()).layout(size=(7, 4)).label(
-                x='Layer', y=f'Log(E3/E4)', color='Method'
-            ).scale(
-                color=so.Nominal(order=sorted(METHOD_MAP.values()))
-            ).limit(y=(-5, 3))
-
+                x='train_CreateSplits_layer_index', y='log_ratio', color='PROBE_type',
+            ).add(so.Line(marker='.')) \
+             .layout(size=(7, 4)) \
+             .label(x='Layer', y=f'Log(E3/E4)', color='Method') \
+             .scale(color=so.Nominal(order=sorted(METHOD_MAP.values()))) \
+             .limit(y=(-5, 3)) \
+             .theme({'font.size': 18}) \
+             .plot(pyplot=True)
+            plot._figure.legends[0].set_bbox_to_anchor(plot._figure.axes[0].get_position())
+            plot._figure.legends[0].set_loc((0.86, 0.07))
             plot.save(
-                self.work_dir.parent / ('log_ratio_E3_E4' + base_name),
-                format='pdf', dpi=300, bbox_inches='tight'
+                self.work_dir.parent / ('log_ratio_E3_E4' + base_name), format='pdf', dpi=300, bbox_inches='tight'
             )
-
