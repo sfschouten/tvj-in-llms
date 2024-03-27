@@ -149,7 +149,7 @@ Y_LIMITS = {
 LEGEND_LOC = {
     'error_1': (.86, .6), 'error_2': (.86, .6), 'error_3': (.86, .6), 'error_4': (.86, .6),
     'error_3+4': (.86, .6), 'error_sv': (.86, .6), 'accuracy@pos_prem': (.86, .07), 'accuracy@no_prem': (.86, .07),
-    'premise_sensitivity': (.86, .07), 'rel_error_sv': (.86, .07),
+    'premise_sensitivity': (.86, .07), 'rel_error_sv': (.86, .07)
 }
 GROUPS = ['no_prem_grp', 'pos_prem_grp', 'combined_grp', 'same_variant_grp']
 
@@ -196,7 +196,7 @@ class PrepareDataframe(Step):
 @Step.register('calc_error_scores')
 class CalculateErrorScores(Step[DuckDBPyConnection]):
     FORMAT = DuckDBFormat
-    VERSION = "018"
+    VERSION = "019"
 
     def run(self, df: pd.DataFrame, **kwargs) -> DuckDBPyConnection:
         subgroup_aggr_stats = {}
@@ -235,8 +235,8 @@ class CalculateErrorScores(Step[DuckDBPyConnection]):
 
                     # supervised error
                     labels = original_pos.label.values[0].astype(bool)
-                    sv_score_1 = labels * pe.clip(min=0)
-                    sv_score_0 = ~labels * (-pe).clip(min=0)
+                    sv_score_1 = labels * (-pe).clip(min=0)
+                    sv_score_0 = ~labels * pe.clip(min=0)
                     df.at[o_neg_i[0], 'error_sv'] = sv_score_1 + sv_score_0
 
                     # error type 3
@@ -393,7 +393,7 @@ class StripPlotPredictions(Step):
 @Step.register('calc_metric_ranks')
 class CalcMetricRanks(Step[DuckDBPyConnection]):
     FORMAT = DuckDBFormat
-    VERSION = "001"
+    VERSION = "010"
 
     def run(self, db: DuckDBPyConnection):
         errors = [f'error_{i}' for i in range(1, 5)] + ['error_sv']
@@ -407,9 +407,11 @@ class CalcMetricRanks(Step[DuckDBPyConnection]):
             db.sql(f'''
                 CREATE TEMP TABLE tmp_{rank_name} AS
                     SELECT data_group_l0_id, subgroup, "{score_name}",
-                        row_number() OVER (PARTITION BY data_group_l2_id, subgroup 
+                        row_number() OVER (PARTITION BY data_group_l2_id
                                            ORDER BY "{score_name}" ASC) AS rank
-                    FROM aggr_stats;
+                    FROM aggr_stats
+                    WHERE PROBE_type != 'LM-head' 
+                    OR eval_CreateSplits_layer_index = 1;
             
                 UPDATE aggr_stats AS l
                 SET "{rank_name}" = r.rank 
@@ -427,6 +429,32 @@ class CalcMetricRanks(Step[DuckDBPyConnection]):
                 UPDATE aggr_stats
                 SET "{t}_avg_rank" = ({rank_cols}) / {len(errors)};
             """)
+
+        def query(by, m):
+            return f"""
+                SELECT data_group_l2_id, PROBE_type, subgroup, "TRAIN_STEP_NAME.1" AS model, 
+                ARG_{m}(eval_CreateSplits_layer_index, {by}) AS layer, 
+                ARG_{m}("accuracy@pos_prem", {by}) AS accuracy_pos_prem, 
+                ARG_{m}(trim_mean_avg_rank, {by}) AS trim_mean_avg_rank,
+                ARG_{m}("p(h|p;e)", {by}), ARG_{m}("p(h|-p;e)", {by}), 
+                ARG_{m}("p(h)", {by}), 
+                ARG_{m}("p(h|-p;c)", {by}), ARG_{m}("p(h|p;c)", {by}), 
+                ARG_{m}(trim_mean_error_1, {by}), ARG_{m}(trim_mean_error_2, {by}),
+                ARG_{m}(trim_mean_error_3, {by}), ARG_{m}(trim_mean_error_4, {by})
+                FROM aggr_stats
+                GROUP BY data_group_l2_id,  "TRAIN_STEP_NAME.1", PROBE_type, subgroup
+            """
+
+        # create final tables
+        table_df = db.sql(
+            query('"accuracy@pos_prem"', 'MAX')
+            + "\nUNION ALL\n" +
+            query('trim_mean_avg_rank', 'MIN')
+        ).df()
+
+        for name, final_df in table_df.groupby(by=['data_group_l2_id']):
+            final_df = final_df.sort_values(by=['subgroup', 'PROBE_type'])
+            final_df.to_csv(self.work_dir.parent / f'final_table_{name}.csv')
 
         return db
 
