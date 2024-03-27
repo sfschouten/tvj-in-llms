@@ -141,13 +141,8 @@ local sv_method_train_steps(data_key, model_key, layer) =
         for iid in [false] #, true]
     };
 
-
-// function that returns all steps for a given model and dataset
-local steps_model(model_key, model_config, dataset_config) =
-    local dataset_name = std.split(std.objectFields(dataset_config)[0], '-')[0];
-
-    # load model
-    local model_step = {
+local model_and_tokenizer(model_key, model_config) =
+    {
         [model_key]: {
             type: "transformers::AutoModelForCausalLM::from_pretrained::step",
             pretrained_model_name_or_path: model_config['key'],
@@ -159,8 +154,17 @@ local steps_model(model_key, model_config, dataset_config) =
         [model_key + "-tokenizer"]: {
             type: "transformers::AutoTokenizer::from_pretrained::step",
             pretrained_model_name_or_path: model_config['key'],
+//            trust_remote_code: true,
         }
     };
+
+
+// function that returns all steps for a given model and dataset
+local steps_model(model_key, model_config, dataset_config) =
+    local dataset_name = std.split(std.objectFields(dataset_config)[0], '-')[0];
+
+    # load model
+    local model_step = model_and_tokenizer(model_key, model_config);
 
     # load data and obtain hidden states
     local data_steps = utils.join_objects([
@@ -263,6 +267,7 @@ local steps_model(model_key, model_config, dataset_config) =
 
 
 {
+    'model_and_tokenizer_func': model_and_tokenizer,
     'steps_model_func': steps_model,
     'data_gen_steps_func': data_gen_steps,
     'sv_method_train_steps_func': sv_method_train_steps,
