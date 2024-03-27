@@ -146,14 +146,22 @@ class BeliefProbe(Registrable, ABC):
 
         #
         hs, _, y = train_data
-        if torch.all(torch.isfinite(y)):        # skip for combined training data
-            y = y.unsqueeze(0).unsqueeze(-1).expand(-1, -1, hs.shape[-1])
-            true_hs = torch.gather(hs, dim=0, index=y).squeeze()
-            false_hs = torch.gather(hs, dim=0, index=1-y).squeeze()
-            true_u = true_hs.mean(dim=0)
-            false_u = false_hs.mean(dim=0)
-            self.length = (true_u - false_u).norm()
-            print(f'true-false distance: {self.length}')
+        if not torch.all(torch.isfinite(y)):
+            hs = hs[:, torch.isfinite(y)]
+            y = y[torch.isfinite(y)]
+
+        y = y.unsqueeze(0).unsqueeze(-1).expand(-1, -1, hs.shape[-1])
+        true_hs = torch.gather(hs, dim=0, index=y).squeeze()
+        false_hs = torch.gather(hs, dim=0, index=1-y).squeeze()
+        true_u = true_hs.mean(dim=0)
+        false_u = false_hs.mean(dim=0)
+        mm_dir = true_u - false_u
+        self.length = mm_dir.norm()
+        pr_dir = self.get_direction()
+        if pr_dir is not None:      # use mass mean vector to obtain sign for all, hopefully more consistent than acc
+            dot = torch.dot(mm_dir, pr_dir)
+            self.sign = int(dot / abs(dot))
+        print(f'true-false distance: {self.length}')
 
     def calibrate_logits(self, logits):
         new = self.sign * logits
@@ -164,7 +172,7 @@ class BeliefProbe(Registrable, ABC):
 
 @Step.register('train_belief_probe')
 class TrainBeliefProbe(Step[BeliefProbe]):
-    VERSION = "023"
+    VERSION = "023a"
 
     def run(
         self,  train_data: DatasetDict[GenOut], calibration_data: DatasetDict[GenOut], probe: BeliefProbe, **kwargs
