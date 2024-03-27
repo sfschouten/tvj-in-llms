@@ -12,7 +12,7 @@ import seaborn.objects as so
 
 @Step.register('direction_similarity')
 class DirectionSimilarity(Step[str]):
-    VERSION = "007"
+    VERSION = "008"
 
     def run(self, result_inputs: list, probes: list[BeliefProbe]) -> str:
         # calculate cosine similarity between pairs of directions
@@ -109,3 +109,20 @@ class DirectionSimilarity(Step[str]):
                   .limit(y=(-1, 1)) \
                   .layout(size=(14, 5 * df3['data_variant1'].nunique()))
         plot3.save(self.work_dir.parent / 'plot3.pdf', format='pdf', dpi=300, bbox_inches='tight')
+
+        # 4. similarity across variants
+        #  x: layers, y: similarity, facets: dataset (cols) variant-pair (row)
+        df4 = duckdb.sql("""
+            SELECT * FROM comparisons
+            WHERE dataset1 = dataset2
+            AND layer1 = layer2
+            AND probe_method1 = probe_method2
+            AND data_variant1 > data_variant2
+        """).df()
+        df4['variant-pair'] = df4['data_variant1'] + '-' + df4['data_variant2']
+        plot4 = so.Plot(df4, x='layer1', y='similarity', color='probe_method1') \
+                  .add(so.Line()) \
+                  .facet(row='variant-pair', col='dataset1') \
+                  .limit(y=(-1, 1)) \
+                  .layout(size=(14, 5 * df4['variant-pair'].nunique()))
+        plot4.save(self.work_dir.parent / 'plot4.pdf', format='pdf', dpi=300, bbox_inches='tight')
