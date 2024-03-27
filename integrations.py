@@ -93,6 +93,7 @@ for name, cls in modeling_auto.__dict__.items():
 @Step.register('transformers::AutoTokenizer::from_pretrained::step')
 class AutoTokenizerLoader(Step):
     CACHEABLE = False
+    SKIP_ID_ARGUMENTS = {'trust_remote_code'}
 
     def run(self, **kwargs) -> Tokenizer:
         return AutoTokenizer.from_pretrained(**kwargs)
