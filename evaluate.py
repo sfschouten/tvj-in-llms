@@ -202,6 +202,8 @@ class EvalBeliefProbe(Step[ProbeResults]):
         logits = torch.logit(probs, eps=1e-6)
         logits = probe.calibrate_logits(logits)
         new_probs = torch.sigmoid(logits)
+        new_acc = ((new_probs > 0.5) == data['eval'][2]).float().mean()
+        print(f'Calibrated accuracy: {new_acc}')
 
         assert torch.all(~torch.isnan(new_probs))
         return probe, data['eval'][2], new_probs, probe.get_direction()

@@ -71,6 +71,7 @@ class SimpleEntBank(datasets.GeneratorBasedBuilder):
         )
 
     def _split_generators(self, dl_manager: DownloadManager):
+        random.seed(self.config.seed)
         version = self.config.ent_bank_version
         ent_bank_dir = dl_manager.download_and_extract(_URLS[f"entailmentbank-{version}"])
         ent_bank_data_dir = os.path.join(ent_bank_dir, os.listdir(ent_bank_dir)[0], "dataset", "task_2")
@@ -128,6 +129,7 @@ class SimpleEntBank(datasets.GeneratorBasedBuilder):
         ]
 
     def _generate_examples(self, filepath):
+        print(f'using {self.config.seed} as a seed')
         random.seed(self.config.seed)
 
         def get_supports(data):
@@ -179,22 +181,22 @@ class SimpleEntBank(datasets.GeneratorBasedBuilder):
 
             nr_true = int(round(self.config.true_proportion * len(ps)))
             true_idxs = random.sample(range(len(ps)), k=nr_true)
+            random.seed((self.config.seed + key) * key)
 
             # return correct and incorrect answers 50/50
             answers = [
-                ((data['answerKey'], data['answer'].replace('.', '')), 1),
+                ((data['answerKey'], data['answer']), 1),
                 (random.choice(wrong_answers), 0)
             ]
             random.shuffle(answers)
+            answers = [((key, f"({c}) {a}"), l) for c, ((key, a), l) in zip(['A', 'B'], answers)]
 
             q = data['meta']['question_text']
             # q = data['question_and_answers']
-            if '.' in q:
-                continue
+            # if '.' in q:
+            #     continue
 
-            if q.endswith('?'):
-                q = q[:-1]
-            q += ': ' + " or ".join(f"'{a}'" for (_, a), _ in answers) + '?'
+            q += " " + " ".join(a for c, ((_, a), _) in zip(['A', 'B'], answers))
 
             for (k, a), l in answers:
                 yield l * len(instances) + key, {

@@ -156,10 +156,12 @@ GROUPS = ['no_prem_grp', 'pos_prem_grp', 'combined_grp', 'same_variant_grp']
 
 @Step.register('prepare_dataframe')
 class PrepareDataframe(Step):
-    VERSION = "008"
+    VERSION = "009"
 
     def run(self, db: DuckDBPyConnection, **kwargs) -> pd.DataFrame:
         df: DataFrame = db.sql("SELECT * FROM results").df()
+
+        assert df['label'].apply(str).nunique() == 1, 'Labels/samples not the same, results incomparable.'
 
         # convert to ndarray
         df['prediction'] = df.apply(lambda x: np.array(x.prediction), axis=1)
