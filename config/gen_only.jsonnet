@@ -4,6 +4,7 @@ local model_key = std.extVar('model');
 local datasets = import 'data.libsonnet';
 local models = import 'models.libsonnet';
 local utils = import 'utils.libsonnet';
+local common = import 'common.libsonnet';
 
 
 
@@ -14,19 +15,7 @@ local dataset_config = datasets[dataset_key];
 local dataset_name = std.split(std.objectFields(dataset_config)[0], '-')[0];
 
 # load model
-local model_step = {
-    [model_key]: {
-        type: "transformers::AutoModelForCausalLM::from_pretrained::step",
-        pretrained_model_name_or_path: model_config['key'],
-        device_map: {"": "cuda:0"},
-        torch_dtype: "float16",
-        revision: model_config['revision'],
-},
-    [model_key + "-tokenizer"]: {
-        type: "transformers::AutoTokenizer::from_pretrained::step",
-        pretrained_model_name_or_path: model_config['key'],
-    }
-};
+local model_step = common.model_and_tokenizer_func(model_key, model_config);
 
 
 local data_gen_steps(data_key, data_config, model_key, model_config, model_object, tokenizer_object) =
