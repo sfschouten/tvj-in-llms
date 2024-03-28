@@ -8,9 +8,7 @@ local create_method_prefix(data_key, model_key, layer) =
 
 
 local data_gen_steps(data_key, data_config, model_key, model_config, model_object, tokenizer_object) =
-    // a prefix for the steps that involve this data and this model
     local prefix = create_method_prefix(data_key, model_key, null);
-
     {
 	    [prefix + "data"]: {
 	        "type": "load_data",
@@ -31,7 +29,13 @@ local data_gen_steps(data_key, data_config, model_key, model_config, model_objec
             all_layers: true,
             model_type: model_config['type'],
 	    },
-    } + {
+   };
+
+local norm_data_steps(data_key, data_config, model_key, model_config, model_object, tokenizer_object) =
+    // a prefix for the steps that involve this data and this model
+    local prefix = create_method_prefix(data_key, model_key, null);
+
+    data_gen_steps(data_key, data_config, model_key, model_config, model_object, tokenizer_object) + {
 	    [prefix + 'layer' + layer + '|split_outputs']: {
 	        "type": "create_splits",
 	        gen_out: {"ref": prefix+"outputs"},
@@ -168,9 +172,9 @@ local steps_model(model_key, model_config, dataset_config) =
 
     # load data and obtain hidden states
     local data_steps = utils.join_objects([
-        data_gen_steps(data['key'], data['value'], model_key, model_config,
-                        {"ref": model_key}, {"ref": model_key + "-tokenizer"})
-        for data in std.objectKeysValues(dataset_config)
+        norm_data_steps(
+            data['key'], data['value'], model_key, model_config, {"ref": model_key}, {"ref": model_key + "-tokenizer"}
+        ) for data in std.objectKeysValues(dataset_config)
     ]);
 
     # combine training data
@@ -269,6 +273,7 @@ local steps_model(model_key, model_config, dataset_config) =
 {
     'model_and_tokenizer_func': model_and_tokenizer,
     'steps_model_func': steps_model,
+    'norm_data_steps_func': norm_data_steps,
     'data_gen_steps_func': data_gen_steps,
     'sv_method_train_steps_func': sv_method_train_steps,
     'usv_method_train_steps_func': usv_method_train_steps,

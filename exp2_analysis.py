@@ -61,24 +61,30 @@ class DuckDBBuilder2(Step[DuckDBPyConnection]):
 
 @Step.register('causal_analysis')
 class CausalAnalysis(Step):
-    VERSION = "002"
+    VERSION = "004"
 
     def run(self, results_db: DuckDBPyConnection):
 
         df = results_db.sql('''
-            SELECT data, model, layer, probe_method, 
+            SELECT model, layer, probe_method, 
                 any_value(labels) AS labels, 
                 list(setting) AS settings,
                 first(predictions) AS intervened_predictions, 
-                last(predictions) AS original_predictions
+                last(predictions) AS original_predictions,
             FROM (SELECT * FROM results ORDER BY setting)
-            GROUP BY data, model, layer, probe_method
+            GROUP BY model, layer, probe_method
         ''').df()
+
+        df['labels'] = df.apply(lambda x: np.array(x.labels).astype(bool), axis=1)
+        df['layer'] = df.apply(lambda x: int(x.layer.replace('layer', '')), axis=1)
 
         df['original_predictions'] = df.apply(lambda x: np.array(x.original_predictions), axis=1)
         df['intervened_predictions'] = df.apply(lambda x: np.array(x.intervened_predictions), axis=1)
-        df['labels'] = df.apply(lambda x: np.array(x.labels).astype(bool), axis=1)
-        df['layer'] = df.apply(lambda x: int(x.layer.replace('layer', '')), axis=1)
+
+        df['mean_original_0'] = df.apply(lambda x: x.original_predictions[~x.labels].mean(), axis=1)
+        df['mean_intervened_0'] = df.apply(lambda x: x.intervened_predictions[~x.labels].mean(), axis=1)
+        df['mean_original_1'] = df.apply(lambda x: x.original_predictions[x.labels].mean(), axis=1)
+        df['mean_intervened_1'] = df.apply(lambda x: x.intervened_predictions[x.labels].mean(), axis=1)
 
         df['differences'] = df['intervened_predictions'] - df['original_predictions']
         df['differences_0'] = df.apply(lambda x: x.differences[~x.labels], axis=1)
@@ -87,13 +93,22 @@ class CausalAnalysis(Step):
         df['mean_difference_1'] = df.apply(lambda x: x.differences_1.mean(), axis=1)
         df['median_difference_0'] = df.apply(lambda x: np.median(x.differences_0), axis=1)
         df['median_difference_1'] = df.apply(lambda x: np.median(x.differences_1), axis=1)
-        df = df.drop(columns=['original_predictions', 'intervened_predictions', 'differences'])
 
         for aggr in ['mean', 'median']:
             p = so.Plot(data=df, x='layer', color='probe_method')
             p = p.add(so.Line(linestyle='dashed'), y=f'{aggr}_difference_0')
             p = p.add(so.Line(linestyle='solid'), y=f'{aggr}_difference_1')
             p.save(
-                self.work_dir.parent / f'causal_plot_{aggr}.pdf',
+                self.work_dir.parent / f'causal_plot_{aggr}_difference.pdf',
+                format='pdf', dpi=300, bbox_inches='tight'
+            )
+
+        for l in [0, 1]:
+            aggr = 'mean'
+            p = so.Plot(data=df, x='layer', color='probe_method')
+            p = p.add(so.Line(linestyle='solid'), y=f'{aggr}_original_{l}')
+            p = p.add(so.Line(linestyle='dashed'), y=f'{aggr}_intervened_{l}')
+            p.save(
+                self.work_dir.parent / f'causal_plot_mean_{l}.pdf',
                 format='pdf', dpi=300, bbox_inches='tight'
             )

@@ -27,7 +27,7 @@ local eval_steps = {
 
 {
     'steps': common.model_and_tokenizer_func(model_key, models[model_key])
-           + common.data_gen_steps_func(data_key, data[dataset][data_key], model_key, models[model_key],
+           + common.norm_data_steps_func(data_key, data[dataset][data_key], model_key, models[model_key],
                                         {ref: model_key}, {ref: model_key + '-tokenizer'})
            + train_steps + eval_steps
 }

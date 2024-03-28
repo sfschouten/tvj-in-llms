@@ -17,22 +17,27 @@ class IntervenedGenerate(Generate):
         super().__init__(**kwargs)
         self.layer_names = None
         self.theta = None
+        self.intervene_on_answer = None
         self.intervene_on_period = None
         self.intervention_sign = None
 
     def forward_batch(self, model, batch, dataloader, mask_token_id, **kwargs):
         neg_ids, pos_ids, _, _, gt_label, neg_answer_tokens, pos_answer_tokens, other_answer_tokens = batch
         nonpad = other_answer_tokens != -100
-        idxs = torch.LongTensor(sum(([i] * nonpad[i].sum() for i in range(other_answer_tokens.shape[0])), start=[]))
-        other_answer_tokens = other_answer_tokens[nonpad].squeeze()
-        if self.intervene_on_period:
-            other_answer_tokens += 1  # period is always token that follows answer token, by design
+        batch_idxs = torch.LongTensor(
+            sum(([i] * nonpad[i].sum() for i in range(other_answer_tokens.shape[0])), start=[]))
+        intervention_tokens = other_answer_tokens[nonpad].squeeze()
+        if self.intervene_on_answer and self.intervene_on_period:
+            intervention_tokens = torch.cat((intervention_tokens, intervention_tokens + 1))
+            batch_idxs = torch.cat((batch_idxs, batch_idxs))
+        elif self.intervene_on_period:
+            intervention_tokens += 1  # period is always token that follows answer token, by design
 
         def intervention(output):
-            answer_tokens = other_answer_tokens.to(output[0].device)
-            _idxs = idxs.to(output[0].device)
-            addition = self.intervention_sign * self.theta.to(output[0].device).to(torch.float16)
-            output[0][_idxs, answer_tokens, :] += addition
+            _tokens = intervention_tokens.to(output[0].device)
+            _idxs = batch_idxs.to(output[0].device)
+            addition = self.intervention_sign * self.theta.to(output[0].device).type(output[0].type())
+            output[0][_idxs, _tokens, :] += addition
             return output
 
         with TraceDict(model, layers=self.layer_names, edit_output=intervention, retain_output=False, retain_input=False):
@@ -52,9 +57,11 @@ class IntervenedGenerate(Generate):
         return neg_hs, pos_hs, neg_logits, pos_logits
 
     def run(self, probe: BeliefProbe, module_template: str, layers: list[int], intervention_sign: int,
-            intervene_on_period: bool = False, *args, **kwargs) -> GenOut:
+            intervene_on_answer: bool = False, intervene_on_period: bool = False, *args, **kwargs) -> GenOut:
         self.intervention_sign = intervention_sign
         self.theta = probe.sign * probe.length * F.normalize(probe.get_direction(), dim=0)
         self.layer_names = [module_template.format(l) for l in layers]
+        self.intervene_on_answer = intervene_on_answer
         self.intervene_on_period = intervene_on_period
+        assert intervene_on_answer or intervene_on_period, 'An intervention on nothing!'
         return super().run(*args, **kwargs)
