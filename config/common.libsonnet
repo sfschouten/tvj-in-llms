@@ -7,7 +7,7 @@ local create_method_prefix(data_key, model_key, layer) =
         data_key + "|" + model_key + "|layer" + layer + "|";
 
 
-local data_gen_steps(data_key, data_config, model_key, model_config, model_object, tokenizer_object) =
+local data_gen_steps(data_key, data_config, model_key, model_config, model_object, tokenizer_object, add_period) =
     local prefix = create_method_prefix(data_key, model_key, null);
     {
 	    [prefix + "data"]: {
@@ -18,7 +18,7 @@ local data_gen_steps(data_key, data_config, model_key, model_config, model_objec
             dataset_config_name: data_config['config'],
             prompt_name: data_config['prompt'],
             model_type: model_config['type'],
-            add_period: true,
+            add_period: add_period,
 	    },
 	    [prefix + "outputs"]: {
 	        "type": "generate_hidden_states",
@@ -31,11 +31,11 @@ local data_gen_steps(data_key, data_config, model_key, model_config, model_objec
 	    },
    };
 
-local norm_data_steps(data_key, data_config, model_key, model_config, model_object, tokenizer_object) =
+local norm_data_steps(data_key, data_config, model_key, model_config, model_object, tokenizer_object, add_period=true) =
     // a prefix for the steps that involve this data and this model
     local prefix = create_method_prefix(data_key, model_key, null);
 
-    data_gen_steps(data_key, data_config, model_key, model_config, model_object, tokenizer_object) + {
+    data_gen_steps(data_key, data_config, model_key, model_config, model_object, tokenizer_object, add_period) + {
 	    [prefix + 'layer' + layer + '|split_outputs']: {
 	        "type": "create_splits",
 	        gen_out: {"ref": prefix+"outputs"},
@@ -164,7 +164,7 @@ local model_and_tokenizer(model_key, model_config) =
 
 
 // function that returns all steps for a given model and dataset
-local steps_model(model_key, model_config, dataset_config) =
+local steps_model(model_key, model_config, dataset_config, add_period=true) =
     local dataset_name = std.split(std.objectFields(dataset_config)[0], '-')[0];
 
     # load model
@@ -173,7 +173,8 @@ local steps_model(model_key, model_config, dataset_config) =
     # load data and obtain hidden states
     local data_steps = utils.join_objects([
         norm_data_steps(
-            data['key'], data['value'], model_key, model_config, {"ref": model_key}, {"ref": model_key + "-tokenizer"}
+            data['key'], data['value'], model_key, model_config, {"ref": model_key}, {"ref": model_key + "-tokenizer"},
+            add_period
         ) for data in std.objectKeysValues(dataset_config)
     ]);
 

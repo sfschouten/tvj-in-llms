@@ -11,12 +11,12 @@ from evaluate import BeliefProbe
 
 @Step.register('generate_with_intervention')
 class IntervenedGenerate(Generate):
-    VERSION = "001"
+    VERSION = "002"
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.layer_names = None
-        self.theta = None
+        self.thetas = None
         self.intervene_on_answer = None
         self.intervene_on_period = None
         self.intervention_sign = None
@@ -33,10 +33,10 @@ class IntervenedGenerate(Generate):
         elif self.intervene_on_period:
             intervention_tokens += 1  # period is always token that follows answer token, by design
 
-        def intervention(output):
+        def intervention(output, layer):
             _tokens = intervention_tokens.to(output[0].device)
             _idxs = batch_idxs.to(output[0].device)
-            addition = self.intervention_sign * self.theta.to(output[0].device).type(output[0].type())
+            addition = self.intervention_sign * self.thetas[layer].to(output[0].device).type(output[0].type())
             output[0][_idxs, _tokens, :] += addition
             return output
 
@@ -56,11 +56,14 @@ class IntervenedGenerate(Generate):
 
         return neg_hs, pos_hs, neg_logits, pos_logits
 
-    def run(self, probe: BeliefProbe, module_template: str, layers: list[int], intervention_sign: int,
+    def run(self, probes: list[BeliefProbe], module_template: str, layers: list[int], intervention_sign: int,
             intervene_on_answer: bool = False, intervene_on_period: bool = False, *args, **kwargs) -> GenOut:
         self.intervention_sign = intervention_sign
-        self.theta = probe.sign * probe.length * F.normalize(probe.get_direction(), dim=0)
         self.layer_names = [module_template.format(l) for l in layers]
+        self.thetas = {
+            layer_name: probe.sign * probe.length * F.normalize(probe.get_direction(), dim=0)
+            for probe, layer_name in zip(probes, self.layer_names)
+        }
         self.intervene_on_answer = intervene_on_answer
         self.intervene_on_period = intervene_on_period
         assert intervene_on_answer or intervene_on_period, 'An intervention on nothing!'
