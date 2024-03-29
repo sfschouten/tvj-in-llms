@@ -16,6 +16,14 @@ from evaluate import ProbeResults
 
 PRIMITIVES = (bool, str, int, float)
 
+METHOD_MAP = {
+    'lr_sklearn': 'LR',
+    # 'lm_head_baseline': 'LM-head',
+    'mass_mean': 'MMP',
+    # 'ccs_gd': 'CCS',
+    'ccr': 'CCR',
+}
+
 
 @Step.register('duckdb_builder2')
 class DuckDBBuilder2(Step[DuckDBPyConnection]):
@@ -61,7 +69,7 @@ class DuckDBBuilder2(Step[DuckDBPyConnection]):
 
 @Step.register('causal_analysis')
 class CausalAnalysis(Step):
-    VERSION = "004"
+    VERSION = "005"
 
     def run(self, results_db: DuckDBPyConnection):
 
@@ -70,10 +78,11 @@ class CausalAnalysis(Step):
                 any_value(labels) AS labels, 
                 list(setting) AS settings,
                 first(predictions) AS intervened_predictions, 
-                last(predictions) AS original_predictions,
+                last(predictions) AS original_predictions
             FROM (SELECT * FROM results ORDER BY setting)
             GROUP BY model, layer, probe_method
         ''').df()
+        df['probe_method'] = df['probe_method'].replace(METHOD_MAP)
 
         df['labels'] = df.apply(lambda x: np.array(x.labels).astype(bool), axis=1)
         df['layer'] = df.apply(lambda x: int(x.layer.replace('layer', '')), axis=1)
@@ -95,9 +104,13 @@ class CausalAnalysis(Step):
         df['median_difference_1'] = df.apply(lambda x: np.median(x.differences_1), axis=1)
 
         for aggr in ['mean', 'median']:
-            p = so.Plot(data=df, x='layer', color='probe_method')
-            p = p.add(so.Line(linestyle='dashed'), y=f'{aggr}_difference_0')
-            p = p.add(so.Line(linestyle='solid'), y=f'{aggr}_difference_1')
+            p = so.Plot(data=df, x='layer', color='probe_method') \
+                .add(so.Line(linestyle='dashed'), y=f'{aggr}_difference_0') \
+                .add(so.Line(linestyle='solid'), y=f'{aggr}_difference_1') \
+                .layout(size=(7, 4)) \
+                .limit(y=(-10, 10)) \
+                .scale(color=so.Nominal(order=sorted(METHOD_MAP.values()))) \
+                .label(x='Layer', y='Mean difference', color='Method')
             p.save(
                 self.work_dir.parent / f'causal_plot_{aggr}_difference.pdf',
                 format='pdf', dpi=300, bbox_inches='tight'
@@ -105,9 +118,13 @@ class CausalAnalysis(Step):
 
         for l in [0, 1]:
             aggr = 'mean'
-            p = so.Plot(data=df, x='layer', color='probe_method')
-            p = p.add(so.Line(linestyle='solid'), y=f'{aggr}_original_{l}')
-            p = p.add(so.Line(linestyle='dashed'), y=f'{aggr}_intervened_{l}')
+            p = so.Plot(data=df, x='layer', color='probe_method') \
+                .add(so.Line(linestyle='solid'), y=f'{aggr}_original_{l}') \
+                .add(so.Line(linestyle='dashed'), y=f'{aggr}_intervened_{l}') \
+                .layout(size=(7, 4)) \
+                .limit(y=(0, 1)) \
+                .scale(color=so.Nominal(order=sorted(METHOD_MAP.values()))) \
+                .label(x='Layer', y='Mean probability', color='Method')
             p.save(
                 self.work_dir.parent / f'causal_plot_mean_{l}.pdf',
                 format='pdf', dpi=300, bbox_inches='tight'
