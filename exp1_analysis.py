@@ -149,7 +149,7 @@ Y_LIMITS = {
 LEGEND_LOC = {
     'error_1': (.86, .6), 'error_2': (.86, .6), 'error_3': (.86, .6), 'error_4': (.86, .6),
     'error_3+4': (.86, .6), 'error_sv': (.86, .6), 'accuracy@pos_prem': (.86, .07), 'accuracy@no_prem': (.86, .07),
-    'premise_sensitivity': (.86, .07), 'rel_error_sv': (.86, .07)
+    'premise_sensitivity': (-0.02, .6), 'rel_error_sv': (.86, .07)
 }
 GROUPS = ['no_prem_grp', 'pos_prem_grp', 'combined_grp', 'same_variant_grp']
 
@@ -461,7 +461,7 @@ class CalcMetricRanks(Step[DuckDBPyConnection]):
 
 @Step.register('plot_metrics')
 class PlotMetrics(Step):
-    VERSION = "029"
+    VERSION = "032"
 
     def run(self, db: DuckDBPyConnection):
         df = db.sql("SELECT * FROM aggr_stats").df()
@@ -514,7 +514,7 @@ class PlotMetrics(Step):
 
 @Step.register('plot_e3_e4')
 class PlotE3E4(Step):
-    VERSION = "032"
+    VERSION = "035"
 
     def run(self, db: DuckDBPyConnection, aggr_type: str = "trim_mean"):
         df = db.sql("SELECT * FROM aggr_stats").df()
@@ -555,7 +555,7 @@ class PlotE3E4(Step):
              .theme({'font.size': 18}) \
              .plot(pyplot=True)
             plot._figure.legends[0].set_bbox_to_anchor(plot._figure.axes[0].get_position())
-            plot._figure.legends[0].set_loc((0.86, 0.07))
+            plot._figure.legends[0].set_loc((-0.02, 0.07))
             plot.save(
                 self.work_dir.parent / ('log_ratio_E3_E4' + base_name), format='pdf', dpi=300, bbox_inches='tight'
             )
