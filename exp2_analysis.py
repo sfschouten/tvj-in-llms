@@ -17,9 +17,9 @@ from evaluate import ProbeResults
 PRIMITIVES = (bool, str, int, float)
 
 METHOD_MAP = {
-    'lr_sklearn': 'LR',
+    'logistic_baseline': 'LR',
     # 'lm_head_baseline': 'LM-head',
-    'mass_mean': 'MMP',
+    'massmean-iid=false': 'MMP',
     # 'ccs_gd': 'CCS',
     'ccr': 'CCR',
 }
@@ -69,7 +69,7 @@ class DuckDBBuilder2(Step[DuckDBPyConnection]):
 
 @Step.register('causal_analysis')
 class CausalAnalysis(Step):
-    VERSION = "005"
+    VERSION = "010"
 
     def run(self, results_db: DuckDBPyConnection):
 
@@ -108,12 +108,12 @@ class CausalAnalysis(Step):
                 .add(so.Line(linestyle='dashed'), y=f'{aggr}_difference_0') \
                 .add(so.Line(linestyle='solid'), y=f'{aggr}_difference_1') \
                 .layout(size=(7, 4)) \
-                .limit(y=(-10, 10)) \
+                .limit(y=(-.12, .12)) \
                 .scale(color=so.Nominal(order=sorted(METHOD_MAP.values()))) \
                 .label(x='Layer', y='Mean difference', color='Method') \
                 .plot(pyplot=True)
             p._figure.legends[0].set_bbox_to_anchor(p._figure.axes[0].get_position())
-            p._figure.legends[0].set_loc((-0.02, .6))
+            p._figure.legends[0].set_loc((0.02, .73))
             p.save(
                 self.work_dir.parent / f'causal_plot_{aggr}_difference.pdf',
                 format='pdf', dpi=300, bbox_inches='tight'
@@ -130,7 +130,7 @@ class CausalAnalysis(Step):
                 .label(x='Layer', y='Mean probability', color='Method') \
                 .plot(pyplot=True)
             p._figure.legends[0].set_bbox_to_anchor(p._figure.axes[0].get_position())
-            p._figure.legends[0].set_loc((-0.02, .6))
+            p._figure.legends[0].set_loc((-0.02, .73))
             p.save(
                 self.work_dir.parent / f'causal_plot_mean_{l}.pdf',
                 format='pdf', dpi=300, bbox_inches='tight'

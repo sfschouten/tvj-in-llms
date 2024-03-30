@@ -12,6 +12,7 @@ local train_data_key = dataset + '-original_pos_prem';
 local train_data_config = data[dataset][train_data_key];
 
 # which data to intervene on
+//local intervention_data_key = dataset + '-original_neg_prem';
 local intervention_data_key = dataset + '-original_pos_prem';
 local intervention_data_config = data[dataset][intervention_data_key];
 local intervention_data_prefix = common.create_method_prefix_func(intervention_data_key, model_key, null);
@@ -64,8 +65,8 @@ local intervention_data = common.norm_data_steps_func(
     {"ref": model_key}, {"ref": model_key + "-tokenizer"}
 );
 
-local layers_list = [[10, 11, 12, 13, 14, 15, 16]];
-//local layers_list = [[8, 9, 10, 11, 12, 13, 14]];
+//local layers_list = [[10, 11, 12, 13, 14, 15, 16]];
+local layers_list = [[8, 9, 10, 11, 12, 13, 14]];
 //local layers_list = [[6, 7, 8, 9, 10, 11, 12]];
 local intervened_outputs =  {
     ["INTERVENED_on"+std.toString(layers)+"_with[" + std.strReplace(train_step['key'], '|', ',') + "]"]: {
