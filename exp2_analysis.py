@@ -110,7 +110,10 @@ class CausalAnalysis(Step):
                 .layout(size=(7, 4)) \
                 .limit(y=(-10, 10)) \
                 .scale(color=so.Nominal(order=sorted(METHOD_MAP.values()))) \
-                .label(x='Layer', y='Mean difference', color='Method')
+                .label(x='Layer', y='Mean difference', color='Method') \
+                .plot(pyplot=True)
+            p._figure.legends[0].set_bbox_to_anchor(p._figure.axes[0].get_position())
+            p._figure.legends[0].set_loc((-0.02, .6))
             p.save(
                 self.work_dir.parent / f'causal_plot_{aggr}_difference.pdf',
                 format='pdf', dpi=300, bbox_inches='tight'
@@ -124,7 +127,10 @@ class CausalAnalysis(Step):
                 .layout(size=(7, 4)) \
                 .limit(y=(0, 1)) \
                 .scale(color=so.Nominal(order=sorted(METHOD_MAP.values()))) \
-                .label(x='Layer', y='Mean probability', color='Method')
+                .label(x='Layer', y='Mean probability', color='Method') \
+                .plot(pyplot=True)
+            p._figure.legends[0].set_bbox_to_anchor(p._figure.axes[0].get_position())
+            p._figure.legends[0].set_loc((-0.02, .6))
             p.save(
                 self.work_dir.parent / f'causal_plot_mean_{l}.pdf',
                 format='pdf', dpi=300, bbox_inches='tight'
