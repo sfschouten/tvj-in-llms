@@ -3,6 +3,7 @@ from tango.integrations.transformers import Tokenizer
 from tango.common import DatasetDict
 
 from generate import GenOut
+from torch.utils.data import Dataset
 
 
 @Step.register('check_tokenization')
@@ -42,3 +43,17 @@ class CheckConsistentData(Step):
 
         assert all_same
 
+
+@Step.register('extract_data_samples')
+class ExtractDataSamples(Step):
+    VERSION = "001"
+    CACHEABLE = False
+
+    def run(self, dataset: Dataset):
+        print("===============================================================================")
+        for i, sample in enumerate(dataset):
+            sample_neg = sample[2]
+            print(sample_neg[0] + ' ' + sample_neg[1])
+            print("===============================================================================")
+            if i >= 9:
+                break
