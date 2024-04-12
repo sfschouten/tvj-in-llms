@@ -2,12 +2,13 @@ import pandas as pd
 import torch
 import duckdb
 
-from tango import Step
-from evaluate import BeliefProbe
-
 import matplotlib.pyplot as plt
 import seaborn as sns
 import seaborn.objects as so
+
+from tango import Step
+
+from beliefprobing.probes.beliefprobe import BeliefProbe
 
 
 @Step.register('direction_similarity')
@@ -31,7 +32,7 @@ class DirectionSimilarity(Step[str]):
             data, model, layer, _, probe_method = name.split('|')
             layer = int(layer.replace('layer', ''))
             dataset, variant = data.split('-')
-            direction = probe.get_direction()
+            direction = probe.direction
             if direction is None:
                 continue
             direction *= probe.sign

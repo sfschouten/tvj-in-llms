@@ -3,10 +3,9 @@ import torch.nn.functional as F
 
 from tango import Step
 
-from nethook import TraceDict
-
-from generate import Generate, GenOut, get_individual_hidden_states, get_masked_lm_logits
-from evaluate import BeliefProbe
+from beliefprobing.nethook import TraceDict
+from beliefprobing.generate import Generate, GenOut, get_individual_hidden_states, get_masked_lm_logits
+from beliefprobing.probes.beliefprobe import BeliefProbe
 
 
 @Step.register('generate_with_intervention')
@@ -61,7 +60,7 @@ class IntervenedGenerate(Generate):
         self.intervention_sign = intervention_sign
         self.layer_names = [module_template.format(l) for l in layers]
         self.thetas = {
-            layer_name: probe.sign * probe.length * F.normalize(probe.get_direction(), dim=0)
+            layer_name: probe.sign * probe.length * F.normalize(probe.direction, dim=0)
             for probe, layer_name in zip(probes, self.layer_names)
         }
         self.intervene_on_answer = intervene_on_answer

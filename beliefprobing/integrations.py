@@ -1,8 +1,9 @@
 import random
 import os
+import uuid
 
 from pathlib import Path
-from typing import Type, Optional
+from typing import Type, Optional, Dict
 
 import duckdb
 from duckdb import DuckDBPyConnection
@@ -19,8 +20,11 @@ from transformers.models.auto import modeling_auto
 from transformers import GPTQConfig as GPTQConfigOriginal
 from transformers import AutoTokenizer
 
-# QUANTIZATION
+from promptsource.templates import Template
+from promptsource.templates import DatasetTemplates
 
+
+# QUANTIZATION
 
 class QuantizationConfig(QuantizationConfigMixin, Registrable):
     def __init__(self, *args, **kwargs):
@@ -29,12 +33,10 @@ class QuantizationConfig(QuantizationConfigMixin, Registrable):
 
 QuantizationConfig.register('gptq-config')(GPTQConfigOriginal)
 
-
 # TODO register other quantization configs
 
 
 # Override default `from_pretrained` wrappers
-
 
 def auto_model_wrapper_factory(cls: type) -> tuple[Type[Model], Type[Step[Model]]]:
     class AutoModelWrapper(cls, Model):  # type: ignore
@@ -99,6 +101,9 @@ class AutoTokenizerLoader(Step):
         return AutoTokenizer.from_pretrained(**kwargs)
 
 
+#  CUSTOM FORMATS
+
+
 class TupleFormat(Format[tuple]):
 
     def __init__(self, formats: tuple[Format, ...]):
@@ -133,3 +138,50 @@ class DuckDBFormat(Format[DuckDBPyConnection]):
         con = duckdb.connect()
         con.sql(f"IMPORT DATABASE '{str(dir)}';")
         return con
+
+
+#  PROMPT TEMPLATES
+
+
+class PromptTemplate(Registrable, Template):
+    pass
+
+
+class NativePromptsourceTemplateLoader:
+
+    @staticmethod
+    def load_existing_template(dataset_name: str, prompt_name: str, prompt_i: Optional[int] = None):
+        all_prompts = DatasetTemplates(dataset_name)
+
+        prompt_name_list = list(all_prompts.name_to_id_mapping.keys())
+        if prompt_i is not None:
+            prompt_name = prompt_name_list[prompt_i]
+
+        return all_prompts[prompt_name]
+
+
+PromptTemplate.register(
+    "promptsource_template", constructor="load_existing_template", exist_ok=True
+)(NativePromptsourceTemplateLoader)
+
+
+@PromptTemplate.register('custom_template')
+class CustomPromptTemplate(Template):
+    NAMESPACE = uuid.UUID('2649977f-b127-4e09-a6ae-64881baa8f4c')
+
+    def __init__(
+            self, name: str, jinja: str, answer_choices: str,
+            metadata_original_task: Optional[bool] = None, metadata_choices_in_prompt: Optional[bool] = None,
+            metadata_metrics: Optional[list[str]] = None, metadata_languages: Optional[list[str]] = None,
+            reference: Optional[str] = '',
+    ):
+        metadata = Template.Metadata(
+            original_task=metadata_original_task,
+            choices_in_prompt=metadata_choices_in_prompt,
+            metrics=metadata_metrics,
+            languages=metadata_languages,
+        )
+        super().__init__(name, jinja, reference, metadata, answer_choices)
+        uuid_name = name + jinja + answer_choices + str(metadata_original_task) + str(metadata_choices_in_prompt) \
+            + str(metadata_metrics) + str(metadata_languages) + str(reference)
+        self.id = uuid.uuid5(self.NAMESPACE, uuid_name)

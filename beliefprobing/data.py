@@ -1,13 +1,16 @@
+from pprint import pprint
+
 import numpy as np
 import torch
 from tango import Step
 from tango.integrations.transformers import Tokenizer
 
-from torch.utils.data import Dataset, DataLoader, Subset
+from torch.utils.data import Dataset, Subset
 
 from datasets import load_dataset
 
-from promptsource.templates import DatasetTemplates
+import beliefprobing.datasets
+from beliefprobing import PromptTemplate
 
 
 class ContrastDataset(Dataset):
@@ -19,7 +22,7 @@ class ContrastDataset(Dataset):
     that won't be truncated.
     """
 
-    def __init__(self, raw_dataset, tokenizer, all_prompts, prompt_name,
+    def __init__(self, raw_dataset, tokenizer, prompt_template, find_prev_answer_tokens, max_nr_prev_answer_tokens,
                  model_type="encoder_decoder", use_decoder=False, device="cuda"):
 
         # data and tokenizer
@@ -41,7 +44,10 @@ class ContrastDataset(Dataset):
             assert self.model_type != "encoder"
 
         # prompt
-        self.prompt = all_prompts[prompt_name]
+        self.prompt = prompt_template
+
+        self.find_prev_answer_tokens = find_prev_answer_tokens
+        self.max_nr_prev_answer_tokens = max_nr_prev_answer_tokens
 
     def __len__(self):
         return len(self.raw_dataset)
@@ -140,41 +146,15 @@ class ContrastDataset(Dataset):
         assert neg_prompt[0] == pos_prompt[0], print("Start of prompts were different for neg and pos.")
         start = neg_prompt[0]
 
-        # find other occurrences of pos/neg answer tokens
-        def find_all(substr):
-            all_ranges = []
-            all_found = False
-            idx = 0
-            while not all_found:
-                idx = start.find(substr, idx, -1)
-                if idx > -1:
-                    all_ranges.append((idx, idx + len(substr) - 1))
-                    idx += len(substr)
-                else:
-                    all_found = True
-            return all_ranges
-
-        other_answer_ranges = find_all(neg_prompt[1]) + find_all(pos_prompt[1])
-
         # tokenize
         neg_ids, pos_ids = self.encode(neg_prompt), self.encode(pos_prompt)
 
-        # find location of answers
-        other_answer_token_idxs = torch.LongTensor(
-            [t for t, o2 in enumerate(neg_ids.encodings[0].offsets)
-             if any(o1[0] <= o2[1] and o2[0] <= o1[1] for o1 in other_answer_ranges)]
-        )
-        other_answer_token_idxs = torch.cat((
-            other_answer_token_idxs,
-            torch.LongTensor([-100] * (5 - len(other_answer_token_idxs)))
-        ))
-
         # verify these are different (e.g. tokenization didn't cut off the difference between them)
         if self.use_decoder and self.model_type == "encoder_decoder":
-            assert (neg_ids["decoder_input_ids"] - pos_ids["decoder_input_ids"]).sum() != 0, print(
+            assert (neg_ids["decoder_input_ids"] - pos_ids["decoder_input_ids"]).sum() != 0, pprint(
                 "The decoder_input_ids for the contrast pairs are the same!", neg_ids, pos_ids)
         else:
-            assert (neg_ids["input_ids"] - pos_ids["input_ids"]).sum() != 0, print(
+            assert (neg_ids["input_ids"] - pos_ids["input_ids"]).sum() != 0, pprint(
                 "The input_ids for the contrast pairs are the same!", neg_ids, pos_ids)
 
         # 'The statement "This is a test sentence." is correct.'
@@ -187,8 +167,39 @@ class ContrastDataset(Dataset):
             [t for t, o in enumerate(pos_ids.encodings[0].offsets) if pos_o[0] <= o[1] and o[0] <= pos_o[1]])
 
         # return the tokenized inputs, the text prompts, and the true label
-        return (neg_ids, pos_ids, neg_prompt, pos_prompt,
-                true_answer, neg_answer_token_idxs, pos_answer_token_idxs, other_answer_token_idxs)
+        result = [
+            neg_ids, pos_ids, neg_prompt, pos_prompt, true_answer, neg_answer_token_idxs, pos_answer_token_idxs, []
+        ]
+
+        if self.find_prev_answer_tokens:
+            # find other occurrences of pos/neg answer tokens
+            def find_all(substr):
+                all_ranges = []
+                all_found = False
+                idx = 0
+                while not all_found:
+                    idx = start.find(substr, idx, -1)
+                    if idx > -1:
+                        all_ranges.append((idx, idx + len(substr) - 1))
+                        idx += len(substr)
+                    else:
+                        all_found = True
+                return all_ranges
+
+            other_answer_ranges = find_all(neg_prompt[1]) + find_all(pos_prompt[1])
+            # find location of answers
+            other_answer_token_idxs = torch.LongTensor([
+                t for t, o2 in enumerate(neg_ids.encodings[0].offsets)
+                if any(o1[0] <= o2[1] and o2[0] <= o1[1] for o1 in other_answer_ranges)
+            ])
+            max_len = self.max_nr_prev_answer_tokens * max(len(neg_answer_token_idxs), len(pos_answer_token_idxs))
+            other_answer_token_idxs = torch.cat((
+                other_answer_token_idxs,
+                torch.LongTensor([-100] * (max_len - len(other_answer_token_idxs)))
+            ))
+            result[-1] = other_answer_token_idxs
+
+        return result
 
 
 @Step.register('load_data')
@@ -196,8 +207,9 @@ class LoadData(Step[Dataset]):
     DETERMINISTIC = True
     CACHEABLE = False       # already cached by HuggingFace datasets
 
-    def run(self, dataset_name: str, split: str, tokenizer: Tokenizer, add_period: bool = False, prompt_i: int = None,
-            prompt_name: str = None, num_examples: int = 1000, dataset_config_name: str = None,
+    def run(self, dataset_name_or_path: str, split: str, tokenizer: Tokenizer, prompt_template: PromptTemplate,
+            find_prev_answer_tokens: bool = False, max_nr_prev_answer_tokens: int = 5,
+            add_period: bool = False, num_examples: int = 1000, dataset_config_name: str = None,
             model_type: str = "encoder_decoder", use_decoder: bool = False, device: str = "cuda", seed=0) -> Dataset:
         """
         Creates a dataloader for a given dataset (and its split), tokenizer, and prompt index
@@ -206,33 +218,30 @@ class LoadData(Step[Dataset]):
         """
         np.random.seed(seed)
 
+        if dataset_name_or_path in beliefprobing.datasets.DATASET_REGISTRY:
+            dataset_name_or_path = beliefprobing.datasets.DATASET_REGISTRY[dataset_name_or_path].__file__
+
         # load the raw dataset
         if dataset_config_name:
-            raw_dataset = load_dataset(dataset_name, dataset_config_name)[split]
+            raw_dataset = load_dataset(dataset_name_or_path, dataset_config_name)[split]
         else:
-            raw_dataset = load_dataset(dataset_name)[split]
-
-        # load all the prompts for that dataset
-        all_prompts = DatasetTemplates(dataset_name)
-
-        prompt_name_list = list(all_prompts.name_to_id_mapping.keys())
-        if prompt_i is not None:
-            prompt_name = prompt_name_list[prompt_i]
+            raw_dataset = load_dataset(dataset_name_or_path)[split]
 
         # create the ContrastDataset (with all samples)
-        contrast_dataset = ContrastDataset(raw_dataset, tokenizer, all_prompts, prompt_name, model_type=model_type,
-                                           use_decoder=use_decoder, device=device)
+        contrast_dataset = ContrastDataset(
+            raw_dataset, tokenizer, prompt_template, model_type=model_type, use_decoder=use_decoder, device=device,
+            find_prev_answer_tokens=find_prev_answer_tokens, max_nr_prev_answer_tokens=max_nr_prev_answer_tokens
+        )
 
         # get a random permutation of the indices; we'll take the first num_examples of these that do not get truncated
         random_idxs = np.random.permutation(len(contrast_dataset))
 
         # remove examples that would be truncated (since this messes up contrast pairs)
-        print(f"Using prompt: {prompt_name}")
-        prompt = all_prompts[prompt_name]
+        print(f"Using prompt: {prompt_template.name}")
         keep_idxs = []
         max_sample_length = 0
         for idx in random_idxs:
-            question, answer = prompt.apply(raw_dataset[int(idx)])
+            question, answer = prompt_template.apply(raw_dataset[int(idx)])
             input_text = question + " " + answer
             if add_period:
                 input_text += "."

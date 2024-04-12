@@ -6,19 +6,22 @@ local common = import 'common.libsonnet';
 local data = import 'data.libsonnet';
 local models = import 'models.libsonnet';
 
+local data_prefix = {'lcb_ent_bank': 'entbank', 'lcb_snli': 'snli'}[dataset];
+
+
 # the training data for the probes whose direction (theta) we use for the intervention
-local train_data_key = dataset + '-original_pos_prem';
+local train_data_key = data_prefix + '-original_pos_prem';
 //local train_data_key = dataset + '-no_prem';
 local train_data_config = data[dataset][train_data_key];
 
 # which data to intervene on
 //local intervention_data_key = dataset + '-original_neg_prem';
-local intervention_data_key = dataset + '-original_pos_prem';
+local intervention_data_key = data_prefix + '-original_pos_prem';
 local intervention_data_config = data[dataset][intervention_data_key];
 local intervention_data_prefix = common.create_method_prefix_func(intervention_data_key, model_key, null);
 
 # the training data for the probes with which we evaluate the effect of the intervention
-local eval_data_key = dataset + '-original_pos_prem';
+local eval_data_key = data_prefix + '-original_pos_prem';
 local eval_data_config = data[dataset][eval_data_key];
 
 
@@ -28,7 +31,7 @@ local model_config = models[model_key];
 local model_and_tokenizer = common.model_and_tokenizer_func(model_key, model_config);
 
 
-local calibration_data_key = dataset + '-no_prem';
+local calibration_data_key = data_prefix + '-no_prem';
 local calibration_data_config = data[dataset][calibration_data_key];
 local calibration_data = common.norm_data_steps_func(
     calibration_data_key, calibration_data_config, model_key, model_config,

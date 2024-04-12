@@ -3,16 +3,16 @@ import re
 import numpy as np
 import pandas as pd
 import torch
+
 import duckdb
+from duckdb import DuckDBPyConnection
 
 from tango import Step
 
-from duckdb import DuckDBPyConnection
-
 import seaborn.objects as so
 
-from integrations import DuckDBFormat
-from evaluate import ProbeResults
+from beliefprobing.integrations import DuckDBFormat
+from beliefprobing.probes.beliefprobe import ProbeResults
 
 PRIMITIVES = (bool, str, int, float)
 

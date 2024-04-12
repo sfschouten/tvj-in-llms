@@ -12,13 +12,14 @@ local data_gen_steps(data_key, data_config, model_key, model_config, model_objec
     {
 	    [prefix + "data"]: {
 	        "type": "load_data",
-            dataset_name: data_config['name'],
+            dataset_name_or_path: data_config['name'],
             split: data_config['split'],
             tokenizer: tokenizer_object,
             dataset_config_name: data_config['config'],
-            prompt_name: data_config['prompt'],
+            prompt_template: data_config['prompt'],
             model_type: model_config['type'],
             add_period: add_period,
+            find_prev_answer_tokens: true,
 	    },
 	    [prefix + "outputs"]: {
 	        "type": "generate_hidden_states",
@@ -63,9 +64,9 @@ local usv_method_train_steps(data_key, model_key, layer) =
 
 //    local ccs_trials = {
 //        [prefix + 'trial|ccs_' + seed]: {
-//            "type": "train_belief_probe",
+//            type: "train_belief_probe",
 //            train_data: {"ref": prefix+"normalized_hidden_states"},
-//            calibration_data: {"ref": calibration_prefix+"normalized_hidden_states"},
+//            cal_data: {"ref": calibration_prefix+"normalized_hidden_states"},
 //            probe: {
 //                "type": "ccs_gd",
 //                seed: seed,
@@ -85,7 +86,7 @@ local usv_method_train_steps(data_key, model_key, layer) =
         [prefix + 'train|' + 'lm_head_baseline']: {
             "type": "train_belief_probe",
             train_data: {"ref": prefix+"normalized_hidden_states"},
-            calibration_data: {"ref": calibration_prefix+"normalized_hidden_states"},
+            cal_data: {"ref": calibration_prefix+"normalized_hidden_states"},
             probe: {
                 "type": "lm_head_baseline",
                 calibrate: true,
@@ -94,14 +95,14 @@ local usv_method_train_steps(data_key, model_key, layer) =
         [prefix + 'train|' + 'ccr']: {
             "type": "train_belief_probe",
             train_data: {"ref": prefix+"normalized_hidden_states"},
-            calibration_data: {"ref": calibration_prefix+"normalized_hidden_states"},
+            cal_data: {"ref": calibration_prefix+"normalized_hidden_states"},
             probe: {"type": "ccr", seed: 0},
         }
 //    } + ccs_trials + {
 //        [prefix + 'train|ccs']: {
 //            "type": "select_best",
 //            train_data: {"ref": prefix+"normalized_hidden_states"},
-//            calibration_data: {"ref": calibration_prefix+"normalized_hidden_states"},
+//            cal_data: {"ref": calibration_prefix+"normalized_hidden_states"},
 //            probes: [
 //                {"ref": prefix + 'trial|' + 'ccs_' + seed}
 //                for seed in CCS_SEEDS
@@ -129,14 +130,14 @@ local sv_method_train_steps(data_key, model_key, layer) =
         [prefix + 'train|' + 'logistic_baseline']: {
             "type": "train_belief_probe",
             train_data: {"ref": prefix+"normalized_hidden_states"},
-            calibration_data: {"ref": calibration_prefix+"normalized_hidden_states"},
+            cal_data: {"ref": calibration_prefix+"normalized_hidden_states"},
             probe: {"type": "lr_sklearn"},
         }
     } + {
         [prefix + 'train|' + 'massmean-iid=' + iid]: {
             "type": "train_belief_probe",
             train_data: {"ref": prefix+"normalized_hidden_states"},
-            calibration_data: {"ref": calibration_prefix+"normalized_hidden_states"},
+            cal_data: {"ref": calibration_prefix+"normalized_hidden_states"},
             probe: {
                 "type": "mass_mean",
                 iid: iid

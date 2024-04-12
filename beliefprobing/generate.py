@@ -16,7 +16,9 @@ import torch.nn.functional as F
 
 from torch.utils.data import Dataset, DataLoader
 
-from integrations import TupleFormat
+from beliefprobing.integrations import TupleFormat
+
+
 NAN_ERROR = 'Hidden states contain NaN value(s)!'
 
 

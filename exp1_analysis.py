@@ -10,7 +10,6 @@ import pandas
 from duckdb import DuckDBPyConnection
 from pandas import DataFrame
 from tango import Step
-from tango.format import TextFormat
 import numpy as np
 from scipy import stats
 
@@ -20,8 +19,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 
-from integrations import DuckDBFormat
-from evaluate import ProbeResults
+from beliefprobing.integrations import DuckDBFormat
+from beliefprobing.probes.beliefprobe import ProbeResults
 
 PRIMITIVES = (bool, str, int, float)
 

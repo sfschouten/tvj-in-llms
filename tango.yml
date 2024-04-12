@@ -4,4 +4,5 @@ workspace:
 #  credentials: "../tvj-in-llms-696cd64a95b1.json"
   type: local
   dir: ./workspace
-include_package: ['exp1_analysis.py', 'exp2_analysis.py', 'data.py', 'evaluate.py', 'generate.py', 'integrations.py', 'causal.py', 'preparation.py']
+#include_package: ['exp1_analysis.py', 'exp2_analysis.py', 'data.py', 'evaluate.py', 'generate.py', 'integrations.py', 'causal.py', 'preparation.py']
+include_package: ['beliefprobing', 'preparation.py']
