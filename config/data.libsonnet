@@ -1,6 +1,6 @@
 local SPLIT = 'train';
-local lcb_snli_prompts = import '../beliefprobing/datasets/lcb_snli/templates.libsonnet';
-local lcb_ent_bank_prompts = import '../beliefprobing/datasets/lcb_ent_bank/templates.libsonnet';
+local lcb_snli_prompts = import '../../belief-probing-repo/src/beliefprobing/bp_datasets/lcb_snli/templates.libsonnet';
+local lcb_ent_bank_prompts = import '../../belief-probing-repo/src/beliefprobing/bp_datasets/lcb_ent_bank/templates.libsonnet';
 
 {
     lcb_snli: {
@@ -8,39 +8,39 @@ local lcb_ent_bank_prompts = import '../beliefprobing/datasets/lcb_ent_bank/temp
         'snli-original_pos_prem': {
             name: 'lcb_snli',
             config: 'no_neutral',
-            prompt: lcb_snli_prompts['pic_full'],
+            prompt: lcb_snli_prompts['pic_full_A'],
             split: SPLIT,
         },
         'snli-original_neg_prem': {
             name: 'lcb_snli',
             config: 'no_neutral',
-            prompt: lcb_snli_prompts['pic_premise_negated'],
+            prompt: lcb_snli_prompts['pic_premise_negated_A'],
             split: SPLIT,
         },
         // shuffled premises
         'snli-shuffle_pos_prem': {
             name: 'lcb_snli',
             config: 'no_neutral_shuffle_premises',
-            prompt: lcb_snli_prompts['pic_full'],
+            prompt: lcb_snli_prompts['pic_full_B'],
             split: SPLIT,
         },
         'snli-shuffle_neg_prem': {
             name: 'lcb_snli',
             config: 'no_neutral_shuffle_premises',
-            prompt: lcb_snli_prompts['pic_premise_negated'],
+            prompt: lcb_snli_prompts['pic_premise_negated_B'],
             split: SPLIT,
         },
         // random characters instead of premises
         'snli-random_pos_prem': {
             name: 'lcb_snli',
             config: 'no_neutral_random_bits',
-            prompt: lcb_snli_prompts['pic_full'],
+            prompt: lcb_snli_prompts['pic_full_B'],
             split: SPLIT,
         },
         'snli-random_neg_prem': {
             name: 'lcb_snli',
             config: 'no_neutral_random_bits',
-            prompt: lcb_snli_prompts['pic_premise_negated'],
+            prompt: lcb_snli_prompts['pic_premise_negated_B'],
             split: SPLIT,
         },
         // no premise
